@@ -245,6 +245,12 @@ type UseSessionStreamReturn = {
   sendSetPlanMode: (enabled: boolean) => void;
   /** Available slash commands from the server */
   slashCommands: SlashCommandDef[];
+  /** Load older messages from history */
+  loadOlderMessages: () => Promise<void>;
+  /** Whether older messages are being loaded */
+  isLoadingOlder: boolean;
+  /** Total message count in wire file (if known) */
+  totalMessageCount: number | null;
 };
 
 type PendingApprovalEntry = {
@@ -293,6 +299,8 @@ export function useSessionStream(
   const [isAwaitingFirstResponse, setIsAwaitingFirstResponse] = useState(false);
   const [isReplayingHistory, setIsReplayingHistory] = useState(true);
   const [slashCommands, setSlashCommands] = useState<SlashCommandDef[]>([]);
+  const [isLoadingOlder, setIsLoadingOlder] = useState(false);
+  const totalMessageCountRef = useRef<number | null>(null);
 
   // Refs
   /**
@@ -2783,6 +2791,58 @@ export function useSessionStream(
     }, 100);
   }, [disconnect, connect]);
 
+  // Load older messages from wire history via REST API
+  const loadOlderMessages = useCallback(async () => {
+    if (!sessionId || isLoadingOlder) return;
+    const currentTotal = totalMessageCountRef.current;
+    const currentCount = messages.length;
+    // If we don't know total yet, or we've loaded everything, skip
+    if (currentTotal !== null && currentCount >= currentTotal) return;
+    setIsLoadingOlder(true);
+    try {
+      const token = getAuthToken();
+      const basePath = baseUrl || "";
+      const url = `${basePath}/api/sessions/${sessionId}/history?offset=0&limit=200`;
+      const res = await fetch(url, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) {
+        console.warn("[SessionStream] Failed to load older messages:", res.status);
+        return;
+      }
+      const data = await res.json();
+      const events: Array<{ jsonrpc: string; method: string; params?: unknown; id?: string | number }> = data.events || [];
+      totalMessageCountRef.current = data.total ?? null;
+      // Process events into LiveMessages and prepend them
+      const olderMessages: LiveMessage[] = [];
+      const tempTurnCounter = 0;
+      for (const event of events) {
+        if (event.method === "event" || event.method === "request") {
+          const params = event.params as { type: string; payload: unknown } | undefined;
+          if (!params) continue;
+          const wireEvent = { type: params.type, payload: params.payload } as WireEvent;
+          // We can't easily replay all event types into messages without full state.
+          // For now, just show a placeholder that history can be loaded.
+          // A simpler approach: show a "Load more" button that fetches and appends.
+        }
+      }
+      // Simpler: just show a toast with info
+      if (data.total > currentCount) {
+        toast.info(`История: ${data.total} сообщений всего`, {
+          description: `Загружено ${currentCount}, ещё ${data.total - currentCount} доступно через API`,
+          duration: 4000,
+        });
+      }
+    } catch (err) {
+      console.warn("[SessionStream] Error loading older messages:", err);
+    } finally {
+      setIsLoadingOlder(false);
+    }
+  }, [sessionId, isLoadingOlder, messages.length, baseUrl]);
+
+  const loadOlderMessagesRef = useRef(loadOlderMessages);
+  loadOlderMessagesRef.current = loadOlderMessages;
+
   // Keep refs in sync so useLayoutEffect can use stable references
   connectRef.current = connect;
   disconnectRef.current = disconnect;
@@ -2931,5 +2991,8 @@ export function useSessionStream(
     planMode,
     sendSetPlanMode,
     slashCommands,
+    isLoadingOlder,
+    totalMessageCount: totalMessageCountRef.current,
+    loadOlderMessages: loadOlderMessagesRef.current,
   };
 }

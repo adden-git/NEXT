@@ -192,15 +192,20 @@ def _ensure_public_file_access_allowed(
         )
 
 
-def _read_wire_lines(wire_file: Path, max_messages: int | None = None) -> tuple[list[str], int]:
+def _read_wire_lines(
+    wire_file: Path, max_messages: int | None = None, offset: int = 0
+) -> tuple[list[str], int]:
     """Read and parse wire.jsonl into JSONRPC event strings (runs in thread).
 
+    Args:
+        wire_file: Path to the wire.jsonl file.
+        max_messages: If set, limit the number of events returned.
+        offset: Number of events to skip from the start of the file.
+
     Returns:
-        A tuple of (event_strings, total_message_count).  If ``max_messages``
-        is set, only the *last* N events are returned, but the total count
-        reflects the full file.
+        A tuple of (event_strings, total_message_count).
     """
-    result: deque[str] = deque(maxlen=max_messages) if max_messages else deque()
+    result: list[str] = []
     total = 0
     with open(wire_file, encoding="utf-8") as f:
         for line in f:
@@ -227,18 +232,20 @@ def _read_wire_lines(wire_file: Path, max_messages: int | None = None) -> tuple[
                     "params": message_raw,
                 }
                 if _is_req:
-                    # JSON-RPC requests require a top-level ``id`` so the
-                    # client can correlate its response.  Use the request's
-                    # own ``id`` field (e.g. ApprovalRequest.id,
-                    # QuestionRequest.id).  Note: ``message_raw`` wraps data
-                    # as ``{"type": ..., "payload": {...}}`` so the id lives
-                    # on the deserialized object, not at the raw dict top level.
                     event_msg["id"] = message.id
-                result.append(json.dumps(event_msg, ensure_ascii=False))
                 total += 1
+                if total <= offset:
+                    continue
+                result.append(json.dumps(event_msg, ensure_ascii=False))
+                if max_messages and len(result) >= max_messages:
+                    # We still count total but stop collecting
+                    pass
             except (json.JSONDecodeError, KeyError, ValueError, TypeError):
                 continue
-    return list(result), total
+    # If max_messages is set, return the *last* N events (most recent)
+    if max_messages and len(result) > max_messages:
+        result = result[-max_messages:]
+    return result, total
 
 
 async def replay_history(
@@ -1777,6 +1784,39 @@ async def _get_git_diff_for_dir(work_dir: Path) -> GitDiffStats:
         return GitDiffStats(is_git_repo=True, error="Git command timed out")
     except Exception as e:
         return GitDiffStats(is_git_repo=True, error=str(e))
+
+
+@router.get("/{session_id}/history", summary="Get paginated wire history")
+async def get_session_history(
+    session_id: UUID,
+    offset: int = 0,
+    limit: int = 200,
+) -> dict[str, Any]:
+    """Return a slice of wire events from the session's wire.jsonl.
+
+    Args:
+        offset: Number of events to skip from the start.
+        limit: Maximum number of events to return (max 500).
+    """
+    session = load_session_by_id(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    wire_file = session.kimi_cli_session.dir / "wire.jsonl"
+    if not wire_file.exists():
+        return {"events": [], "total": 0, "offset": offset, "limit": limit}
+
+    if limit <= 0:
+        limit = 200
+    if limit > 500:
+        limit = 500
+    if offset < 0:
+        offset = 0
+
+    lines, total = await asyncio.to_thread(
+        _read_wire_lines, wire_file, max_messages=limit, offset=offset
+    )
+    return {"events": [json.loads(line) for line in lines], "total": total, "offset": offset, "limit": limit}
 
 
 @router.get("/{session_id}/git-diff", summary="Get git diff stats")
