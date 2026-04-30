@@ -506,13 +506,19 @@ async def post_update(request: Request) -> dict[str, Any]:
             return f"ERROR: {e}"
 
     logs.append("=== git pull ===")
-    logs.append(run(["git", "pull", "origin", "main"], startup_dir))
+    pull_output = run(["git", "pull", "origin", "fresh-main"], startup_dir)
+    logs.append(pull_output)
+    if "Already up to date" in pull_output:
+        logs.append("Already up to date")
+    elif "error" in pull_output.lower() or "fatal" in pull_output.lower():
+        logs.append("Git pull failed, aborting")
+        return {"success": False, "logs": logs}
 
     logs.append("=== npm build ===")
     web_dir = startup_dir / "web"
     env = os.environ.copy()
     env["VITE_DISABLE_TYPESCRIPT"] = "1"
-    logs.append(run(["npm", "run", "build"], web_dir))
+    logs.append(run(["npx", "vite", "build"], web_dir))
 
     logs.append("=== copy static ===")
     dist_dir = web_dir / "dist"

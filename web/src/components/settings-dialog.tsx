@@ -128,6 +128,8 @@ export function SettingsDialog() {
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [version, setVersion] = useState<string>("");
+  const [latestVersion, setLatestVersion] = useState<string>("");
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [updateLogs, setUpdateLogs] = useState<string[] | null>(null);
   const touchStartY = useRef<number | null>(null);
@@ -620,6 +622,38 @@ export function SettingsDialog() {
                     <span className="text-sm">Текущая версия</span>
                     <span className="text-xs font-mono bg-muted px-2 py-0.5 rounded">{version || "—"}</span>
                   </div>
+                  {latestVersion && latestVersion !== version && (
+                    <div className="text-xs text-amber-500 font-medium">
+                      ⬆ Доступно обновление: {latestVersion}
+                    </div>
+                  )}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={checkingUpdate}
+                    onClick={async () => {
+                      setCheckingUpdate(true);
+                      try {
+                        const res = await fetch("https://api.github.com/repos/adden-git/kimi-next/releases/latest");
+                        if (res.ok) {
+                          const data = await res.json();
+                          const tag = (data.tag_name || "").replace(/^v/, "");
+                          setLatestVersion(tag);
+                          if (tag === version) {
+                            toast.success("Уже последняя версия", { description: tag });
+                          }
+                        } else {
+                          toast.error("Не удалось проверить обновления");
+                        }
+                      } catch {
+                        toast.error("Ошибка сети при проверке обновлений");
+                      } finally {
+                        setCheckingUpdate(false);
+                      }
+                    }}
+                  >
+                    {checkingUpdate ? "Проверка..." : "Проверить обновления"}
+                  </Button>
                   <Button
                     variant="outline"
                     size="sm"
