@@ -15,9 +15,11 @@ import {
   PanelRightClose,
   PanelRightOpen,
   SearchIcon,
+  Settings,
 } from "lucide-react";
 import { SessionInfoPopover } from "./session-info-popover";
 import { OpenInMenu } from "./open-in-menu";
+import { SessionSettingsDialog } from "@/components/session-settings-dialog";
 import { isMacOS } from "@/hooks/utils";
 
 type ChatWorkspaceHeaderProps = {
@@ -199,6 +201,8 @@ export function ChatWorkspaceHeader({
                 </KbdGroup>
               </TooltipContent>
             </Tooltip>
+
+            <SessionSettingsDialog sessionId={selectedSessionId} />
 
             <Tooltip>
               <TooltipTrigger asChild>

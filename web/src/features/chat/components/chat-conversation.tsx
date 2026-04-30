@@ -125,10 +125,10 @@ export function ChatConversation({
             </div>
             <div className="text-center">
               <p className="text-lg font-medium text-foreground">
-                Create a session to begin
+                Создайте сессию, чтобы начать
               </p>
               <p className="mt-1 text-sm text-muted-foreground">
-                Click the + button in the sidebar to start a new session
+                Нажмите кнопку + в сайдбаре для новой сессии
               </p>
             </div>
             {onCreateSession ? (
@@ -148,12 +148,12 @@ export function ChatConversation({
                     }}
                   >
                     <PlusIcon className="size-4" />
-                    <span>Create new session</span>
+                    <span>Новая сессия</span>
                   </Button>
                 </TooltipTrigger>
                 <TooltipContent className="flex flex-col items-center gap-1" side="top">
                   <div className="flex items-center gap-2">
-                    <span>Create new session</span>
+                    <span>Новая сессия</span>
                     <KbdGroup>
                       <Kbd>Shift</Kbd>
                       <span className="text-muted-foreground">+</span>
@@ -163,7 +163,7 @@ export function ChatConversation({
                     </KbdGroup>
                   </div>
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <span>{newSessionShortcutModifier}+Click to open in new tab</span>
+                    <span>{newSessionShortcutModifier}+Клик — открыть в новой вкладке</span>
                   </div>
                 </TooltipContent>
               </Tooltip>

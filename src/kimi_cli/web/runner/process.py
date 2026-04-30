@@ -6,7 +6,7 @@ import asyncio
 import base64
 import contextlib
 import io
-import json
+from kimi_cli.web.utils._json import json
 import mimetypes
 import sys
 import time
@@ -34,6 +34,7 @@ from kimi_cli.web.models import (
 )
 from kimi_cli.web.runner.messages import new_session_status_message
 from kimi_cli.web.store.sessions import load_session_by_id
+from kimi_cli.session_state import load_session_state
 from kimi_cli.wire.jsonrpc import (
     JSONRPCCancelMessage,
     JSONRPCErrorObject,
@@ -206,13 +207,32 @@ class SessionProcess:
                     str(self.session_id),
                 ]
 
+            # Build env with per-session model params overriding global env
+            env = dict(get_clean_env())
+            try:
+                session = load_session_by_id(self.session_id)
+                if session is not None:
+                    state = load_session_state(session.kimi_cli_session.dir)
+                    if state.model_params is not None:
+                        mp = state.model_params
+                        if mp.temperature is not None:
+                            env["KIMI_MODEL_TEMPERATURE"] = str(mp.temperature)
+                        if mp.top_p is not None:
+                            env["KIMI_MODEL_TOP_P"] = str(mp.top_p)
+                        if mp.max_tokens is not None:
+                            env["KIMI_MODEL_MAX_TOKENS"] = str(mp.max_tokens)
+                        if mp.thinking_keep is not None:
+                            env["KIMI_MODEL_THINKING_KEEP"] = mp.thinking_keep
+            except Exception:
+                pass  # Fall back to global env if state can't be read
+
             self._process = await asyncio.create_subprocess_exec(
                 *worker_cmd,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 limit=STREAM_LIMIT,
-                env=get_clean_env(),
+                env=env,
             )
 
             self._read_task = asyncio.create_task(self._read_loop())

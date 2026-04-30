@@ -32,6 +32,34 @@ const shouldAnalyze = process.env.ANALYZE === "true";
 export default defineConfig({
   // Use relative paths so assets work under any base path.
   base: "./",
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          "vendor-react": ["react", "react-dom"],
+          "vendor-ui": [
+            "@radix-ui/react-dialog",
+            "@radix-ui/react-dropdown-menu",
+            "@radix-ui/react-select",
+            "@radix-ui/react-tabs",
+            "@radix-ui/react-tooltip",
+            "lucide-react",
+            "tailwind-merge",
+            "clsx",
+            "class-variance-authority",
+          ],
+          "vendor-chat": [
+            "ai",
+            "react-virtuoso",
+            "streamdown",
+            "diff",
+            "gitdiff-parser",
+          ],
+          "vendor-heavy": ["mermaid", "shiki"],
+        },
+      },
+    },
+  },
   plugins: [
     nodePolyfills({
       include: ["path", "url"],

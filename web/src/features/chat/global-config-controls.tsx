@@ -182,7 +182,7 @@ export function GlobalConfigControls({
 
   const thinkingToggle = (
     <div className="flex h-9 items-center gap-2 rounded-md px-2">
-      <span className="text-xs text-muted-foreground">Thinking</span>
+      <span className="text-xs text-muted-foreground">T</span>
       <Switch
         aria-label="Toggle global thinking"
         checked={
@@ -220,7 +220,7 @@ export function GlobalConfigControls({
           <Button
             variant="ghost"
             size="sm"
-            className="h-9 max-w-[160px] justify-start gap-2 border-0"
+            className="h-9 max-w-[100px] sm:max-w-[160px] justify-start gap-2 border-0"
             aria-label="Change global model"
             type="button"
             disabled={isLoading || isUpdating || !config}
@@ -279,30 +279,7 @@ export function GlobalConfigControls({
         thinkingToggle
       )}
 
-      {onPlanModeChange && (
-        <>
-          <div className="mx-0 h-4 w-px bg-border/70" />
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div className="flex h-9 items-center gap-2 rounded-md px-2">
-                <span className="text-xs text-muted-foreground">
-                  Plan
-                </span>
-                <Switch
-                  aria-label="Toggle plan mode"
-                  checked={planMode}
-                  onCheckedChange={onPlanModeChange}
-                />
-              </div>
-            </TooltipTrigger>
-            <TooltipContent sideOffset={8}>
-              {planMode
-                ? "Plan mode is active. The model will only read and plan, not modify files."
-                : "Enable plan mode for read-only research and planning."}
-            </TooltipContent>
-          </Tooltip>
-        </>
-      )}
+
 
       {(lastBusySkip && lastBusySkip.length > 0) || error ? (
         <div className="mx-1.5 h-4 w-px bg-border/70" />

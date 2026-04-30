@@ -27,9 +27,12 @@ from kimi_cli.utils.server import (
     is_local_host,
 )
 from kimi_cli.web.api import (
+    auth_router,
     config_router,
+    files_router,
     open_in_router,
     sessions_router,
+    ssh_router,
     work_dirs_router,
 )
 from kimi_cli.web.auth import (
@@ -199,7 +202,10 @@ def create_app(
     # CORS middleware for local development
     application.add_middleware(cast(Any, CORSMiddleware), **cors_kwargs)
 
+    application.include_router(auth_router)
     application.include_router(config_router)
+    application.include_router(files_router)
+    application.include_router(ssh_router)
     application.include_router(sessions_router)
     application.include_router(work_dirs_router)
     if not restrict_sensitive_apis:
@@ -235,6 +241,7 @@ def run_web_server(
     dangerously_omit_auth: bool = False,
     restrict_sensitive_apis: bool | None = None,
     lan_only: bool = True,
+    dynamic_auth: bool = False,
 ) -> None:
     """Run the web server."""
     import sys
@@ -272,7 +279,7 @@ def run_web_server(
         session_token = None
     elif auth_token:
         session_token = auth_token
-    elif public_mode:
+    elif public_mode and not dynamic_auth:
         session_token = secrets.token_urlsafe(32)
     else:
         session_token = None
@@ -445,6 +452,8 @@ def run_web_server(
         reload=reload,
         log_level="info",
         timeout_graceful_shutdown=3,
+        loop="uvloop",
+        http="httptools",
     )
 
 

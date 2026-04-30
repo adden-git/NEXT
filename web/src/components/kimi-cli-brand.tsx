@@ -33,14 +33,14 @@ export function KimiCliBrand({
           className={logoSize}
         />
         <span className={cn(textSizeClass, "font-semibold text-foreground")}>
-          Kimi Code
+          Kimi Next
         </span>
       </a>
       {showVersion && (
         <span
           className={cn("text-muted-foreground font-medium", versionPadding)}
         >
-          v{kimiCliVersion}
+          v1.0
         </span>
       )}
     </div>

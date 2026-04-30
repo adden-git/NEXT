@@ -83,7 +83,7 @@ def _derive_title_from_wire(session_dir: Path) -> str:
         return "Untitled"
 
     try:
-        import json
+        from kimi_cli.web.utils._json import json
 
         from kosong.message import Message
 

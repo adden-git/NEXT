@@ -1,6 +1,8 @@
 import type React from "react";
 import {
+  lazy,
   memo,
+  Suspense,
   useCallback,
   useMemo,
   useRef,
@@ -29,8 +31,11 @@ import {
   CheckSquare,
   Square,
   PanelLeftClose,
+  FolderOpen,
+  Terminal,
 } from "lucide-react";
 import { Virtuoso } from "react-virtuoso";
+import { getAuthToken } from "@/lib/auth";
 import { KimiCliBrand } from "@/components/kimi-cli-brand";
 import {
   Dialog,
@@ -41,6 +46,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+const SettingsDialog = lazy(() => import("@/components/settings-dialog"));
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Kbd, KbdGroup } from "@/components/ui/kbd";
 import {
@@ -204,6 +210,8 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
   // Guard against re-entry: pressing Enter and the resulting blur (e.g. when
   // the user clicks the toast to dismiss it) both call handleSaveEdit.
   const isSavingRenameRef = useRef(false);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressDidTrigger = useRef(false);
 
   // Session search state
   const [sessionSearch, setSessionSearch] = useState(searchQuery);
@@ -219,6 +227,37 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
 
   // Track if we're in the context menu of an archived session
   const [contextMenuIsArchived, setContextMenuIsArchived] = useState(false);
+
+  // Long press hook for mobile rename
+  function useLongPress(callback: () => void, ms = 600) {
+    const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const didLongPress = useRef(false);
+
+    const start = useCallback(() => {
+      didLongPress.current = false;
+      timerRef.current = setTimeout(() => {
+        didLongPress.current = true;
+        callback();
+      }, ms);
+    }, [callback, ms]);
+
+    const stop = useCallback(() => {
+      if (timerRef.current) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+    }, []);
+
+    const preventClick = useCallback((e: MouseEvent) => {
+      if (didLongPress.current) {
+        e.preventDefault();
+        e.stopPropagation();
+        didLongPress.current = false;
+      }
+    }, []);
+
+    return { onTouchStart: start, onTouchEnd: stop, onTouchMove: stop, onClickCapture: preventClick };
+  }
 
   // Multi-select state
   const [isMultiSelectMode, setIsMultiSelectMode] = useState(false);
@@ -338,7 +377,7 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
     return Array.from(groups.entries())
       .map(([key, items]) => ({
         workDir: key,
-        displayName: key === "__other__" ? "Other" : shortenPath(key),
+        displayName: key === "__other__" ? "Другое" : shortenPath(key),
         sessions: items,
       }))
       .sort((a, b) => {
@@ -471,6 +510,32 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
     setEditingTitle("");
   };
 
+  const startLongPress = useCallback((session: SessionSummary) => {
+    longPressDidTrigger.current = false;
+    longPressTimerRef.current = setTimeout(() => {
+      longPressDidTrigger.current = true;
+      if (onRenameSession) {
+        setEditingSessionId(session.id);
+        setEditingTitle(normalizeTitle(session.title));
+      }
+    }, 600);
+  }, [onRenameSession, normalizeTitle]);
+
+  const cancelLongPress = useCallback(() => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  }, []);
+
+  const preventLongPressClick = useCallback((e: MouseEvent) => {
+    if (longPressDidTrigger.current) {
+      e.preventDefault();
+      e.stopPropagation();
+      longPressDidTrigger.current = false;
+    }
+  }, []);
+
   const openDeleteConfirm = useCallback(
     (session?: SessionSummary) => {
       if (!session) {
@@ -534,7 +599,7 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
             className="text-xs text-muted-foreground hover:text-foreground"
             onClick={handleLoadMore}
           >
-            Load more
+            Загрузить ещё
           </button>
         )}
       </div>
@@ -568,7 +633,7 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
             type="button"
           >
             <Pencil className="size-3.5" />
-            Rename
+            Переименовать
           </button>
         )}
         {/* Show Archive for non-archived sessions */}
@@ -579,7 +644,7 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
             type="button"
           >
             <Archive className="size-3.5" />
-            Archive
+            В архив
           </button>
         )}
         {/* Show Unarchive for archived sessions */}
@@ -590,7 +655,7 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
             type="button"
           >
             <ArchiveRestore className="size-3.5" />
-            Unarchive
+            Из архива
           </button>
         )}
         {/* Show Select Multiple option */}
@@ -601,7 +666,7 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
             type="button"
           >
             <CheckSquare className="size-3.5" />
-            Select Multiple
+            Выбрать несколько
           </button>
         )}
         <button
@@ -610,7 +675,7 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
           type="button"
         >
           <Trash2 className="size-3.5" />
-          Delete session
+          Удалить сессию
         </button>
       </div>
     );
@@ -629,7 +694,7 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
             {onClose && (
               <button
                 type="button"
-                aria-label="Close sidebar"
+                aria-label="Закрыть сайдбар"
                 className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground"
                 onClick={onClose}
               >
@@ -640,23 +705,12 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
 
           {/* Sessions */}
           <div className="flex items-center justify-between px-3 pt-3">
-            <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Sessions</h4>
-            <div className="flex items-center gap-1">
-              <button
-                aria-label="Refresh sessions"
-                className="cursor-pointer rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-60"
-                onClick={handleRefreshSessions}
-                disabled={isRefreshing || !onRefreshSessions}
-                aria-busy={isRefreshing}
-                title="Refresh Sessions"
-                type="button"
-              >
-                <RefreshCw className={`size-4 ${isRefreshing ? "animate-spin" : ""}`} />
-              </button>
+            <div className="flex items-center gap-2">
+              <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Сессии</h4>
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
-                    aria-label="New Session"
+                    aria-label="Новая сессия"
                     className="cursor-pointer rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
                     onClick={(e) => {
                       if (hasPlatformModifier(e)) {
@@ -674,7 +728,7 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
                 </TooltipTrigger>
                 <TooltipContent className="flex flex-col items-center gap-1" side="bottom">
                   <div className="flex items-center gap-2">
-                    <span>New session</span>
+                    <span>Новая сессия</span>
                     <KbdGroup>
                       <Kbd>Shift</Kbd>
                       <span className="text-muted-foreground">+</span>
@@ -684,10 +738,44 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
                     </KbdGroup>
                   </div>
                   <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <span>{newSessionShortcutModifier}+Click to open in new tab</span>
+                    <span>{newSessionShortcutModifier}+Клик — открыть в новой вкладке</span>
                   </div>
                 </TooltipContent>
               </Tooltip>
+              <Suspense fallback={null}>
+                <SettingsDialog />
+              </Suspense>
+            </div>
+            <div className="flex items-center gap-1">
+              <a
+                href={"/files.html?token=" + encodeURIComponent(getAuthToken() || "")}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="cursor-pointer rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                title="Файловый менеджер"
+              >
+                <FolderOpen className="size-4" />
+              </a>
+              <a
+                href={"/ssh.html?auto=1&token=" + encodeURIComponent(getAuthToken() || "")}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="cursor-pointer rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                title="SSH терминал"
+              >
+                <Terminal className="size-4" />
+              </a>
+              <button
+                aria-label="Обновить сессии"
+                className="cursor-pointer rounded-md p-1 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-60"
+                onClick={handleRefreshSessions}
+                disabled={isRefreshing || !onRefreshSessions}
+                aria-busy={isRefreshing}
+                title="Обновить сессии"
+                type="button"
+              >
+                <RefreshCw className={`size-4 ${isRefreshing ? "animate-spin" : ""}`} />
+              </button>
             </div>
           </div>
 
@@ -701,7 +789,7 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
                   className="text-muted-foreground hover:text-foreground transition-colors disabled:opacity-50"
                   onClick={() => toggleSelectAllSessions(isMultiSelectArchived ? archivedSessions : filteredSessions)}
                   disabled={isBulkOperating}
-                  aria-label={selectedSessionIds.size === (isMultiSelectArchived ? archivedSessions : filteredSessions).length ? "Deselect all" : "Select all"}
+                  aria-label={selectedSessionIds.size === (isMultiSelectArchived ? archivedSessions : filteredSessions).length ? "Снять выделение" : "Выделить всё"}
                 >
                   {selectedSessionIds.size === (isMultiSelectArchived ? archivedSessions : filteredSessions).length && selectedSessionIds.size > 0 ? (
                     <CheckSquare className="size-4" />
@@ -710,7 +798,7 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
                   )}
                 </button>
                 <span className="text-xs text-muted-foreground">
-                  {selectedSessionIds.size} selected
+                  {selectedSessionIds.size} выбрано
                 </span>
               </div>
               {/* Right: action buttons */}
@@ -733,7 +821,7 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
                           )}
                         </button>
                       </TooltipTrigger>
-                      <TooltipContent side="bottom">Unarchive</TooltipContent>
+                      <TooltipContent side="bottom">Из архива</TooltipContent>
                     </Tooltip>
                   )
                 ) : (
@@ -753,7 +841,7 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
                           )}
                         </button>
                       </TooltipTrigger>
-                      <TooltipContent side="bottom">Archive</TooltipContent>
+                      <TooltipContent side="bottom">В архив</TooltipContent>
                     </Tooltip>
                   )
                 )}
@@ -774,7 +862,7 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
                         )}
                       </button>
                     </TooltipTrigger>
-                    <TooltipContent side="bottom">Delete</TooltipContent>
+                    <TooltipContent side="bottom">Удалить</TooltipContent>
                   </Tooltip>
                 )}
                 {/* Divider */}
@@ -791,7 +879,7 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
                       <X className="size-4" />
                     </button>
                   </TooltipTrigger>
-                  <TooltipContent side="bottom">Done</TooltipContent>
+                  <TooltipContent side="bottom">Готово</TooltipContent>
                 </Tooltip>
               </div>
             </div>
@@ -804,7 +892,7 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
               <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
               <input
                 type="text"
-                placeholder="Search sessions..."
+                placeholder="Поиск сессий..."
                 value={sessionSearch}
                 onChange={(e) => setSessionSearch(e.target.value)}
                 className="h-8 w-full rounded-md border border-input bg-background pl-8 pr-8 text-xs placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
@@ -814,7 +902,7 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
                   type="button"
                   onClick={() => setSessionSearch("")}
                   className="absolute right-2 top-1/2 -translate-y-1/2 cursor-pointer rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
-                  aria-label="Clear search"
+                  aria-label="Очистить поиск"
                 >
                   <X className="size-3.5" />
                 </button>
@@ -827,10 +915,10 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
               onValueChange={(value) => value && handleViewModeChange(value as ViewMode)}
               className="shrink-0"
             >
-              <ToggleGroupItem value="list" aria-label="List view" title="List view" className="h-8 w-8 px-0">
+              <ToggleGroupItem value="list" aria-label="Список" title="Список" className="h-8 w-8 px-0">
                 <List className="size-3.5" />
               </ToggleGroupItem>
-              <ToggleGroupItem value="grouped" aria-label="Grouped view" title="Grouped by folder" className="h-8 w-8 px-0">
+              <ToggleGroupItem value="grouped" aria-label="Группы" title="Группировка по папкам" className="h-8 w-8 px-0">
                 <FolderTree className="size-3.5" />
               </ToggleGroupItem>
             </ToggleGroup>
@@ -872,7 +960,7 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
                                 <TooltipTrigger asChild>
                                   <button
                                     type="button"
-                                    aria-label={`New session in ${group.displayName}`}
+                                    aria-label={`Новая сессия в ${group.displayName}`}
                                     className="shrink-0 cursor-pointer rounded-md p-1 text-muted-foreground opacity-0 group-hover/dir:opacity-100 hover:bg-accent hover:text-foreground transition-all"
                                     onClick={(e) => {
                                       e.stopPropagation();
@@ -890,8 +978,8 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
                                   </button>
                                 </TooltipTrigger>
                                 <TooltipContent className="flex flex-col items-center gap-1" side="right">
-                                  <span>New session here</span>
-                                  <span className="text-xs text-muted-foreground">{newSessionShortcutModifier}+Click to open in new tab</span>
+                                  <span>Новая сессия здесь</span>
+                                  <span className="text-xs text-muted-foreground">{newSessionShortcutModifier}+Клик — открыть в новой вкладке</span>
                                 </TooltipContent>
                               </Tooltip>
                             )}
@@ -911,6 +999,10 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
                                             : "hover:bg-secondary/60"
                                         }`}
                                         onClick={() => !isEditing && onSelectSession(session.id)}
+                                        onClickCapture={(e) => preventLongPressClick(e as unknown as MouseEvent)}
+                                        onTouchStart={() => startLongPress(session)}
+                                        onTouchEnd={cancelLongPress}
+                                        onTouchMove={cancelLongPress}
                                         onContextMenu={(event) =>
                                           !isEditing && handleSessionContextMenu(event, session.id)
                                         }
@@ -955,7 +1047,7 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
                                       </button>
                                       <button
                                         type="button"
-                                        aria-label="Delete session"
+                                        aria-label="Удалить сессию"
                                         className="md:hidden inline-flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
                                         onClick={(event) => {
                                           event.stopPropagation();
@@ -1031,6 +1123,10 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
                             onSelectSession(session.id);
                           }
                         }}
+                        onClickCapture={(e) => preventLongPressClick(e as unknown as MouseEvent)}
+                        onTouchStart={() => startLongPress(session)}
+                        onTouchEnd={cancelLongPress}
+                        onTouchMove={cancelLongPress}
                         onContextMenu={(event) =>
                           !(isEditing || showCheckbox) && handleSessionContextMenu(event, session.id)
                         }
@@ -1077,7 +1173,7 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
                       {!showCheckbox && onArchiveSession && (
                         <button
                           type="button"
-                          aria-label="Archive session"
+                          aria-label="Архивировать сессию"
                           className="md:hidden inline-flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent"
                           onClick={(event) => {
                             event.stopPropagation();
@@ -1114,7 +1210,7 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
                   <CollapsibleTrigger className="flex w-full items-center gap-2 px-3 py-2 text-xs text-muted-foreground hover:text-foreground rounded-lg hover:bg-muted/50 group">
                     <ChevronDown className="size-3 transition-transform group-data-[state=closed]:-rotate-90" />
                     <Archive className="size-3.5" />
-                    <span className="flex-1 text-left font-medium">Archived</span>
+                    <span className="flex-1 text-left font-medium">Архив</span>
                     <span className="text-[10px] text-muted-foreground/70 bg-muted px-1.5 py-0.5 rounded">
                       {archivedSessions.length}{hasMoreArchivedSessions ? '+' : ''}
                     </span>
@@ -1166,6 +1262,10 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
                                         onSelectSession(session.id);
                                       }
                                     }}
+                                    onClickCapture={(e) => preventLongPressClick(e as unknown as MouseEvent)}
+                                    onTouchStart={() => startLongPress(session)}
+                                    onTouchEnd={cancelLongPress}
+                                    onTouchMove={cancelLongPress}
                                     onContextMenu={(event) =>
                                       !showCheckbox && handleSessionContextMenu(event, session.id, true)
                                     }
@@ -1191,7 +1291,7 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
                                   {!showCheckbox && onUnarchiveSession && (
                                     <button
                                       type="button"
-                                      aria-label="Unarchive session"
+                                      aria-label="Разархивировать сессию"
                                       className="md:hidden inline-flex h-7 w-7 shrink-0 cursor-pointer items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-accent"
                                       onClick={(event) => {
                                         event.stopPropagation();
@@ -1230,7 +1330,7 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
                                 className="text-xs text-muted-foreground hover:text-foreground"
                                 onClick={() => onLoadMoreArchivedSessions?.()}
                               >
-                                Load more
+                                Загрузить ещё
                               </button>
                             )}
                           </div>
@@ -1252,19 +1352,19 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-destructive">
               <AlertTriangle className="size-5" />
-              Delete Session
+              Удалить сессию
             </DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete <strong className="text-foreground">{deleteConfirm.sessionTitle}</strong>?
-              This action cannot be undone.
+              Удалить <strong className="text-foreground">{deleteConfirm.sessionTitle}</strong>?
+              Это действие нельзя отменить.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="gap-2 w-full justify-end">
             <Button variant="outline" onClick={handleCancelDelete}>
-              Cancel
+              Отмена
             </Button>
             <Button variant="destructive" onClick={handleConfirmDelete}>
-              Delete
+              Удалить
             </Button>
           </DialogFooter>
         </DialogContent>

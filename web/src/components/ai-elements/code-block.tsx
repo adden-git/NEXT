@@ -375,7 +375,7 @@ export const CodeBlock = ({
         {...props}
       >
         {/* Icons fixed at the top right, do not scroll with content */}
-        <div className="hover-reveal absolute top-1.5 right-1.5 z-10 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="hover-reveal absolute top-1.5 right-2 z-10 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity bg-card/90 backdrop-blur-sm rounded-md p-0.5 border border-border/40 shadow-sm">
           {isTall && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -487,19 +487,44 @@ export const CodeBlockCopyButton = ({
   const { code } = useContext(CodeBlockContext);
 
   const copyToClipboard = async () => {
-    if (typeof window === "undefined" || !navigator?.clipboard?.writeText) {
-      onError?.(new Error("Clipboard API not available"));
-      return;
+    // Try modern Clipboard API first
+    if (typeof window !== "undefined" && navigator?.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(code);
+        setIsCopied(true);
+        onCopy?.();
+        setTimeout(() => setIsCopied(false), timeout);
+        return;
+      } catch {
+        // Fallback to execCommand on HTTP or permission denied
+      }
     }
 
-    try {
-      await navigator.clipboard.writeText(code);
-      setIsCopied(true);
-      onCopy?.();
-      setTimeout(() => setIsCopied(false), timeout);
-    } catch (error) {
-      onError?.(error as Error);
+    // Fallback for HTTP / non-secure contexts
+    if (typeof document !== "undefined") {
+      try {
+        const textarea = document.createElement("textarea");
+        textarea.value = code;
+        textarea.style.position = "fixed";
+        textarea.style.left = "-9999px";
+        textarea.style.top = "0";
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        const success = document.execCommand("copy");
+        document.body.removeChild(textarea);
+        if (success) {
+          setIsCopied(true);
+          onCopy?.();
+          setTimeout(() => setIsCopied(false), timeout);
+          return;
+        }
+      } catch {
+        // ignore
+      }
     }
+
+    onError?.(new Error("Clipboard API not available"));
   };
 
   const Icon = isCopied ? CheckIcon : CopyIcon;

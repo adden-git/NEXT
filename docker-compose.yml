@@ -1,0 +1,24 @@
+version: "3.8"
+
+services:
+  kimi-next:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kimi-next
+    ports:
+      - "5500:5500"
+    volumes:
+      - kimi-data:/root/.kimi
+      - /var/run/docker.sock:/var/run/docker.sock  # optional: for Docker-in-Docker features
+    environment:
+      - KIMI_WEB_HOST=0.0.0.0
+      - KIMI_WEB_PORT=5500
+    restart: unless-stopped
+    # If you need to mount your project directory:
+    # volumes:
+    #   - ./:/workspace
+    #   - kimi-data:/root/.kimi
+
+volumes:
+  kimi-data:

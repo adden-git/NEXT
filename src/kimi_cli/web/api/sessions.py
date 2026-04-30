@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
+from kimi_cli.web.utils._json import json
 import mimetypes
 import os
 import shutil
@@ -625,6 +625,533 @@ async def update_session(
     return updated_session
 
 
+class SessionModelParamsRequest(BaseModel):
+    """Update per-session model parameters request."""
+
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
+    max_tokens: int | None = Field(default=None, ge=1, le=200_000)
+    thinking_keep: str | None = Field(default=None)
+
+
+@router.get("/{session_id}/model-params", summary="Get per-session model parameters")
+async def get_session_model_params(
+    session_id: UUID,
+    runner: KimiCLIRunner = Depends(get_runner),
+) -> dict[str, Any]:
+    """Get per-session model parameters. Returns empty values if not set."""
+    from kimi_cli.session_state import load_session_state
+
+    session = get_editable_session(session_id, runner)
+    session_dir = session.kimi_cli_session.dir
+    state = load_session_state(session_dir)
+    params = state.model_params
+    return {
+        "temperature": params.temperature if params else None,
+        "top_p": params.top_p if params else None,
+        "max_tokens": params.max_tokens if params else None,
+        "thinking_keep": params.thinking_keep if params else None,
+    }
+
+
+@router.put("/{session_id}/model-params", summary="Update per-session model parameters")
+async def update_session_model_params(
+    session_id: UUID,
+    request: SessionModelParamsRequest,
+    runner: KimiCLIRunner = Depends(get_runner),
+) -> dict[str, Any]:
+    """Update per-session model parameters. These override global env vars for this session."""
+    from kimi_cli.session_state import load_session_state, save_session_state
+
+    session = get_editable_session(session_id, runner)
+    session_dir = session.kimi_cli_session.dir
+    state = load_session_state(session_dir)
+
+    from kimi_cli.session_state import ModelParams
+    state.model_params = ModelParams(
+        temperature=request.temperature,
+        top_p=request.top_p,
+        max_tokens=request.max_tokens,
+        thinking_keep=request.thinking_keep,
+    )
+    save_session_state(state, session_dir)
+
+    return {
+        "success": True,
+        "temperature": request.temperature,
+        "top_p": request.top_p,
+        "max_tokens": request.max_tokens,
+        "thinking_keep": request.thinking_keep,
+    }
+
+
+@router.get("/{session_id}/instructions", summary="Get instruction files for session")
+async def get_session_instructions(
+    session_id: UUID,
+    runner: KimiCLIRunner = Depends(get_runner),
+) -> dict[str, Any]:
+    """Discover AGENTS.md, skills, and other instruction files for a session.
+
+    Returns files with `auto_loaded` flag indicating whether Kimi CLI
+    picks them up automatically.
+    """
+    from kimi_cli.utils.path import find_project_root
+
+    session = load_session_by_id(session_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    work_dir = Path(str(session.kimi_cli_session.work_dir)).resolve()
+    from kaos.path import KaosPath
+    work_dir_kaos = KaosPath.unsafe_from_local_path(work_dir)
+    project_root_kaos = await find_project_root(work_dir_kaos)
+    project_root = Path(str(project_root_kaos))
+
+    files: list[dict[str, Any]] = []
+
+    def _is_skill_path(path: Path) -> bool:
+        """Check if path is inside a skills directory."""
+        parts = [p.lower() for p in path.relative_to(work_dir).parts]
+        return (".kimi" in parts or ".agents" in parts or ".claude" in parts or ".codex" in parts) and "skills" in parts
+
+    def _is_agents_md(path: Path) -> bool:
+        """Check if file is an AGENTS.md (auto-discovered by Kimi CLI)."""
+        name = path.name.lower()
+        if name != "agents.md":
+            return False
+        # Direct AGENTS.md in any directory along the path
+        rel_parts = [p.lower() for p in path.relative_to(work_dir).parts]
+        # If it's directly in work_dir or parent dirs — auto_loaded
+        # If it's inside .kimi/ or .agents/ — also auto_loaded
+        return len(rel_parts) <= 2 or ".kimi" in rel_parts or ".agents" in rel_parts
+
+    def _is_builtin(path: Path) -> bool:
+        """Check if file is a builtin Kimi CLI skill (not project-specific)."""
+        try:
+            rel = path.relative_to(work_dir)
+            parts = [p.lower() for p in rel.parts]
+            # Builtin skills are those in .agents/skills/ or .kimi/skills/
+            # that live inside the Kimi CLI repo itself (work_dir == project_root)
+            if work_dir.resolve() == project_root.resolve():
+                return "skills" in parts and (".agents" in parts or ".kimi" in parts or ".claude" in parts or ".codex" in parts)
+        except ValueError:
+            pass
+        return False
+
+    def classify(path: Path) -> tuple[str, bool, bool]:
+        """Classify file and return (type, auto_loaded, is_builtin)."""
+        rel_parts = [p.lower() for p in path.relative_to(work_dir).parts]
+        is_blt = _is_builtin(path)
+
+        # AGENTS.md files — auto_loaded
+        if _is_agents_md(path):
+            return ("agents", True, is_blt)
+
+        # Skills inside .kimi/skills/ or .agents/skills/ — auto_loaded
+        if _is_skill_path(path) and path.name.lower() == "skill.md":
+            return ("skill", True, is_blt)
+
+        # Legacy / manual files
+        if ".kimi" in rel_parts or ".agents" in rel_parts:
+            if "prompts" in rel_parts:
+                return ("prompt", False, is_blt)
+            if "hooks" in rel_parts:
+                return ("hook", False, is_blt)
+            if "agents" in rel_parts:
+                return ("agent", False, is_blt)
+            if "plugins" in rel_parts:
+                return ("plugin", False, is_blt)
+
+        if path.name.lower().endswith(".skill.md"):
+            return ("skill", False, is_blt)
+        if path.name.lower().endswith(".prompt.md"):
+            return ("prompt", False, is_blt)
+
+        return ("instruction", False, is_blt)
+
+    # 1. AGENTS.md / agents.md along path from work_dir up to project_root
+    try:
+        current = work_dir
+        while True:
+            for name in ("AGENTS.md", "agents.md"):
+                candidate = current / name
+                if candidate.is_file():
+                    rel = candidate.relative_to(work_dir)
+                    ftype, auto, is_blt = classify(candidate)
+                    files.append({
+                        "path": str(rel),
+                        "full_path": str(candidate),
+                        "type": ftype,
+                        "name": name,
+                        "auto_loaded": auto,
+                        "is_builtin": is_blt,
+                    })
+            for dotdir in (".kimi", ".agents"):
+                agents = current / dotdir / "AGENTS.md"
+                if agents.is_file():
+                    rel = agents.relative_to(work_dir)
+                    ftype, auto, is_blt = classify(agents)
+                    files.append({
+                        "path": str(rel),
+                        "full_path": str(agents),
+                        "type": ftype,
+                        "name": f"{dotdir}/AGENTS.md",
+                        "auto_loaded": auto,
+                        "is_builtin": is_blt,
+                    })
+            if current.resolve() == project_root.resolve():
+                break
+            parent = current.parent
+            if parent == current:
+                break
+            current = parent
+    except Exception:
+        pass
+
+    # 2. Explicitly scan .kimi/skills/ and .agents/skills/ for SKILL.md
+    for subdir_name in (".kimi", ".agents", ".claude", ".codex"):
+        skills_dir = work_dir / subdir_name / "skills"
+        if not skills_dir.is_dir():
+            continue
+        for skill_root in skills_dir.iterdir():
+            if not skill_root.is_dir():
+                continue
+            skill_md = skill_root / "SKILL.md"
+            if skill_md.is_file():
+                rel = skill_md.relative_to(work_dir)
+                ftype, auto, is_blt = classify(skill_md)
+                files.append({
+                    "path": str(rel),
+                    "full_path": str(skill_md),
+                    "type": ftype,
+                    "name": "SKILL.md",
+                    "auto_loaded": auto,
+                    "is_builtin": is_blt,
+                })
+
+    # 3. .kimi/ and .agents/ other subdirectories under work_dir
+    for subdir_name in (".kimi", ".agents"):
+        subdir = work_dir / subdir_name
+        if not subdir.is_dir():
+            continue
+        for root, _dirs, filenames in os.walk(subdir):
+            for fname in filenames:
+                if not fname.lower().endswith(".md"):
+                    continue
+                fpath = Path(root) / fname
+                try:
+                    rel = fpath.relative_to(work_dir)
+                except ValueError:
+                    continue
+                # Skip already found AGENTS.md and SKILL.md
+                if fname.lower() == "agents.md":
+                    continue
+                if fname.lower() == "skill.md" and _is_skill_path(fpath):
+                    continue
+                ftype, auto, is_blt = classify(fpath)
+                files.append({
+                    "path": str(rel),
+                    "full_path": str(fpath),
+                    "type": ftype,
+                    "name": fname,
+                    "auto_loaded": auto,
+                    "is_builtin": is_blt,
+                })
+
+    # Deduplicate by full_path
+    seen: set[str] = set()
+    unique_files: list[dict[str, Any]] = []
+    for f in files:
+        fp = f["full_path"]
+        if fp not in seen:
+            seen.add(fp)
+            unique_files.append(f)
+
+    # Sort: auto_loaded first, then by type, then by path
+    type_order = {"agents": 0, "skill": 1, "agent": 2, "prompt": 3, "hook": 4, "plugin": 5, "instruction": 6}
+    unique_files.sort(key=lambda x: (
+        0 if x.get("auto_loaded") else 1,
+        type_order.get(x["type"], 99),
+        x["path"],
+    ))
+
+    return {
+        "work_dir": str(work_dir),
+        "project_root": str(project_root),
+        "files": unique_files,
+    }
+
+
+class CreateInstructionRequest(BaseModel):
+    """Create a template instruction file."""
+
+    type: str = Field(..., description="Type: agents, skill, hook, prompt, agent")
+    name: str | None = Field(default=None, description="File name for skill/hook/prompt/agent")
+
+
+@router.post("/{session_id}/create-instruction", summary="Create a template instruction file")
+async def create_instruction_file(
+    session_id: UUID,
+    request: CreateInstructionRequest,
+    runner: KimiCLIRunner = Depends(get_runner),
+) -> dict[str, Any]:
+    """Create a template AGENTS.md, SKILL.md, hook, prompt or agent file in the session's work_dir."""
+    session = load_session_by_id(session_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    work_dir = Path(str(session.kimi_cli_session.work_dir)).resolve()
+
+    templates: dict[str, tuple[Path, str]] = {
+        "agents": (work_dir / "AGENTS.md", """# AGENTS.md — Правила для AI
+
+> Проект: {project}
+> Обновлено: {date}
+
+## Общие правила
+
+1. Весь код пиши на русском языке (комментарии, названия переменных)
+2. Не используй `sleep`, `watch`, бесконечные циклы в shell-командах
+3. Всегда делай бэкап перед изменением важных файлов
+4. Для логов: `tail -N файл`, никогда `sleep && tail`
+
+## Защищённые файлы
+
+- Не изменяй без разрешения: `ecosystem.config.js`, `db.js`, `app.js`, `.env`
+
+## Стиль кода
+
+- EJS: `<%= %>` для пользовательских данных, `<%- %>` только для доверенного HTML
+- CSRF: формы — поле `_csrf`, AJAX — заголовок `X-CSRF-Token`
+- Весь текст интерфейса — на русском
+"""),
+        "skill": (work_dir / ".kimi" / "skills" / (request.name or "my-skill") / "SKILL.md", """---
+name: {name}
+description: Описание навыка
+---
+
+## {name}
+
+Когда использовать этот навык:
+
+1. Условие 1
+2. Условие 2
+
+### Пошаговые инструкции
+
+1. Шаг 1
+2. Шаг 2
+3. Шаг 3
+
+### Примеры
+
+```
+Пример кода или вывода
+```
+"""),
+        "hook": (work_dir / ".kimi" / "hooks" / (request.name or "my-hook.sh"), """#!/bin/bash
+# .kimi/hooks/{name}
+# Hook для автоматизации
+
+read JSON
+# echo "$JSON" | jq -r '.tool_name'
+
+# Выход 0 = разрешить, 2 = заблокировать
+exit 0
+"""),
+        "prompt": (work_dir / ".kimi" / "prompts" / (request.name or "my-prompt.prompt.md"), """# {name}
+
+## Контекст
+
+Опишите контекст использования этого промпта.
+
+## Инструкции
+
+1. Инструкция 1
+2. Инструкция 2
+
+## Ожидаемый результат
+
+Что должно получиться в результате.
+"""),
+        "agent": (work_dir / ".kimi" / "agents" / (request.name or "my-agent.agent.md"), """# {name}
+
+## Роль
+
+Опишите роль этого агента.
+
+## Возможности
+
+- Возможность 1
+- Возможность 2
+
+## Ограничения
+
+- Не делай X
+- Всегда делай Y
+"""),
+    }
+
+    if request.type not in templates:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown type: {request.type}. Supported: {', '.join(templates.keys())}",
+        )
+
+    dest_path, template = templates[request.type]
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if dest_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"File already exists: {dest_path}",
+        )
+
+    content = template.format(
+        project=work_dir.name,
+        date=datetime.now(UTC).strftime("%Y-%m-%d"),
+        name=request.name or "my-template",
+    )
+    dest_path.write_text(content, encoding="utf-8")
+
+    return {
+        "success": True,
+        "path": str(dest_path.relative_to(work_dir)),
+        "full_path": str(dest_path),
+        "type": request.type,
+    }
+
+
+@router.post("/{session_id}/refactor-instructions", summary="Analyze and refactor instruction files")
+async def refactor_session_instructions(
+    session_id: UUID,
+    runner: KimiCLIRunner = Depends(get_runner),
+) -> dict[str, Any]:
+    """Analyze instruction files and suggest optimizations."""
+    from kimi_cli.utils.path import find_project_root
+
+    session = load_session_by_id(session_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    work_dir = Path(str(session.kimi_cli_session.work_dir)).resolve()
+    from kaos.path import KaosPath
+    work_dir_kaos = KaosPath.unsafe_from_local_path(work_dir)
+    project_root_kaos = await find_project_root(work_dir_kaos)
+    project_root = Path(str(project_root_kaos))
+
+    recommendations: list[dict[str, str]] = []
+    optimized_files: list[dict[str, Any]] = []
+    total_size = 0
+    agents_md_size = 0
+
+    # Collect instruction files (same logic as /instructions)
+    all_files: list[Path] = []
+    try:
+        current = work_dir
+        while True:
+            for name in ("AGENTS.md", "agents.md"):
+                candidate = current / name
+                if candidate.is_file():
+                    all_files.append(candidate)
+            for dotdir in (".kimi", ".agents"):
+                agents = current / dotdir / "AGENTS.md"
+                if agents.is_file():
+                    all_files.append(agents)
+            if current.resolve() == project_root.resolve():
+                break
+            parent = current.parent
+            if parent == current:
+                break
+            current = parent
+    except Exception:
+        pass
+
+    for subdir_name in (".kimi", ".agents"):
+        subdir = work_dir / subdir_name
+        if not subdir.is_dir():
+            continue
+        for root, _dirs, filenames in os.walk(subdir):
+            for fname in filenames:
+                if fname.lower().endswith(".md"):
+                    all_files.append(Path(root) / fname)
+
+    # Deduplicate
+    seen: set[str] = set()
+    unique_files: list[Path] = []
+    for f in all_files:
+        fp = str(f.resolve())
+        if fp not in seen:
+            seen.add(fp)
+            unique_files.append(f)
+
+    # Analyze each file
+    for fpath in unique_files:
+        try:
+            content = fpath.read_text(encoding="utf-8")
+            size = len(content.encode("utf-8"))
+            total_size += size
+
+            is_agents = fpath.name.lower() == "agents.md"
+            if is_agents:
+                agents_md_size += size
+
+            recs: list[str] = []
+            if size > 32 * 1024 and is_agents:
+                recs.append(f"Файл превышает лимит 32 KB — Kimi CLI обрежет его. Разбейте на части или перенесите в .kimi/skills/")
+            if size > 100 * 1024:
+                recs.append(f"Очень большой файл ({size // 1024} KB). Рассмотрите разделение на модули.")
+            if content.count("#") > 50:
+                recs.append("Много заголовков — возможно, файл слишком раздут. Объедините похожие секции.")
+            if len([l for l in content.splitlines() if l.strip()]) < 10 and size > 500:
+                recs.append("Мало содержательных строк — возможно, много пустых строк или комментариев.")
+
+            if recs:
+                try:
+                    rel = fpath.relative_to(work_dir)
+                except ValueError:
+                    rel = fpath.name
+                recommendations.append({
+                    "file": str(rel),
+                    "message": "; ".join(recs),
+                })
+        except Exception:
+            pass
+
+    # General recommendations
+    if agents_md_size == 0:
+        recommendations.insert(0, {
+            "file": "Общее",
+            "message": "AGENTS.md не найден. Создайте его для задания правил поведения Kimi в этом проекте.",
+        })
+
+    if total_size > 100 * 1024:
+        recommendations.insert(0, {
+            "file": "Общее",
+            "message": f"Общий размер инструкций {total_size // 1024} KB. Большие инструкции замедляют старт сессии. Перенесите редкоиспользуемое в skills.",
+        })
+
+    summary_parts: list[str] = []
+    summary_parts.append(f"Найдено файлов: {len(unique_files)}")
+    summary_parts.append(f"Общий размер: {total_size // 1024} KB")
+    if agents_md_size > 0:
+        summary_parts.append(f"AGENTS.md: {agents_md_size // 1024} KB")
+    if len(recommendations) == 0:
+        summary_parts.append("Всё выглядит оптимально ✓")
+    else:
+        summary_parts.append(f"Рекомендаций: {len(recommendations)}")
+
+    return {
+        "success": True,
+        "summary": ". ".join(summary_parts),
+        "total_files": len(unique_files),
+        "total_size": total_size,
+        "agents_md_size": agents_md_size,
+        "recommendations": recommendations,
+        "optimized_files": optimized_files,
+    }
+
+
 def extract_first_turn_from_wire(session_dir: Path) -> tuple[str, str] | None:
     """Extract the first turn's user message and assistant response from wire.jsonl.
 
@@ -1106,15 +1633,8 @@ async def get_startup_dir(request: Request) -> str:
     return request.app.state.startup_dir
 
 
-@router.get("/{session_id}/git-diff", summary="Get git diff stats")
-async def get_session_git_diff(session_id: UUID) -> GitDiffStats:
-    """get git diff stats for the session's work directory"""
-    session = load_session_by_id(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    work_dir = Path(str(session.kimi_cli_session.work_dir))
-
+async def _get_git_diff_for_dir(work_dir: Path) -> GitDiffStats:
+    """Get git diff stats for any directory."""
     # Check if it is a git repository
     if not (work_dir / ".git").exists():
         return GitDiffStats(is_git_repo=False)
@@ -1221,3 +1741,14 @@ async def get_session_git_diff(session_id: UUID) -> GitDiffStats:
         return GitDiffStats(is_git_repo=True, error="Git command timed out")
     except Exception as e:
         return GitDiffStats(is_git_repo=True, error=str(e))
+
+
+@router.get("/{session_id}/git-diff", summary="Get git diff stats")
+async def get_session_git_diff(session_id: UUID) -> GitDiffStats:
+    """get git diff stats for the session's work directory"""
+    session = load_session_by_id(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    work_dir = Path(str(session.kimi_cli_session.work_dir))
+    return await _get_git_diff_for_dir(work_dir)

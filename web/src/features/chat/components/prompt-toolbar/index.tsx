@@ -13,7 +13,8 @@ import { useQueueStore } from "../../queue-store";
 import { useToolEventsStore } from "@/features/tool/store";
 import { ToolbarActivityIndicator, type ActivityDetail } from "../activity-status-indicator";
 import { ToolbarQueuePanel, ToolbarQueueTab } from "./toolbar-queue";
-import { ToolbarChangesPanel, ToolbarChangesTab } from "./toolbar-changes";
+// Git diff moved to global SettingsDialog — removed from chat toolbar
+// import { ToolbarChangesPanel, ToolbarChangesTab } from "./toolbar-changes";
 import { ToolbarTodoPanel, ToolbarTodoTab } from "./toolbar-todo";
 import { ToolbarContextIndicator } from "./toolbar-context";
 
@@ -51,8 +52,11 @@ export const PromptToolbar = memo(function PromptToolbarComponent({
   const [activeTab, setActiveTab] = useState<TabId | null>(null);
   const prevQueueLenRef = useRef(0);
 
-  const stats = gitDiffStats;
-  const hasChanges = Boolean(stats?.isGitRepo && stats.hasChanges && stats.files && !stats.error);
+  // Git diff removed from chat toolbar — now only in global SettingsDialog
+  // const stats = gitDiffStats;
+  // const hasChanges = Boolean(stats?.isGitRepo && stats.hasChanges && stats.files && !stats.error);
+  const hasChanges = false;
+  const stats = null;
   const hasQueue = queue.length > 0;
   const hasTodo = todoItems.length > 0;
   const hasContext = usagePercent !== undefined && usedTokens !== undefined && maxTokens !== undefined;
@@ -88,9 +92,8 @@ export const PromptToolbar = memo(function PromptToolbarComponent({
           activeTab !== "changes" && "max-h-32 overflow-y-auto py-1 px-0.5",
         )}>
           {activeTab === "queue" && <ToolbarQueuePanel queue={queue} />}
-          {activeTab === "changes" && stats && (
-            <ToolbarChangesPanel stats={stats} workDir={workDir} />
-          )}
+          {/* Git diff removed from chat toolbar — now only in global SettingsDialog */}
+        {/* activeTab === "changes" && stats && <ToolbarChangesPanel stats={stats} workDir={workDir} /> */}
           {activeTab === "todo" && (
             <ToolbarTodoPanel items={todoItems} />
           )}
@@ -111,13 +114,8 @@ export const PromptToolbar = memo(function PromptToolbarComponent({
           />
         )}
 
-        {hasChanges && stats?.files && (
-          <ToolbarChangesTab
-            stats={stats}
-            isActive={activeTab === "changes"}
-            onToggle={() => toggleTab("changes")}
-          />
-        )}
+        {/* Git diff removed from chat toolbar — now only in global SettingsDialog */}
+        {/* {hasChanges && stats?.files && <ToolbarChangesTab stats={stats} isActive={activeTab === "changes"} onToggle={() => toggleTab("changes")} />} */}
 
         {hasTodo && (
           <ToolbarTodoTab

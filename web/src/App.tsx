@@ -1,21 +1,54 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChatStatus } from "ai";
 import { PromptInputProvider } from "@ai-elements";
 import { toast } from "sonner";
-import { PanelLeftOpen, PanelLeftClose } from "lucide-react";
+import { PanelLeftOpen, PanelLeftClose, Shield } from "lucide-react";
 import { cn } from "./lib/utils";
 import { ResizablePanel, ResizablePanelGroup } from "./components/ui/resizable";
 import { ChatWorkspaceContainer } from "./features/chat/chat-workspace-container";
 import { SessionsSidebar } from "./features/sessions/sessions";
-import { CreateSessionDialog } from "./features/sessions/create-session-dialog";
 import { Toaster } from "./components/ui/sonner";
+
+const CreateSessionDialog = lazy(() => import("./features/sessions/create-session-dialog"));
 import { formatRelativeTime } from "./hooks/utils";
 import { useSessions } from "./hooks/useSessions";
 import { useTheme } from "./hooks/use-theme";
 import { ThemeToggle } from "./components/ui/theme-toggle";
+import { Button } from "@/components/ui/button";
 import type { SessionStatus } from "./lib/api/models";
 import type { PanelSize, PanelImperativeHandle } from "react-resizable-panels";
-import { consumeAuthTokenFromUrl, setAuthToken } from "./lib/auth";
+import { AuthPage } from "./components/auth-page";
+import { consumeAuthTokenFromUrl, getAuthToken, setAuthToken } from "./lib/auth";
+
+function SessionSyncGuard() {
+  const [sync, setSync] = useState<{expired: boolean; days_remaining: number} | null>(null);
+  useEffect(() => {
+    fetch("/api/config/license").then(r => r.json()).then(setSync).catch(() => setSync(null));
+  }, []);
+  if (!sync) return null;
+  if (sync.expired) {
+    return (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+        <div className="bg-background border rounded-xl shadow-2xl max-w-md w-full p-6 space-y-4 text-center">
+          <h2 className="text-lg font-semibold">Пробный период истёк</h2>
+          <p className="text-sm text-muted-foreground">Для продолжения необходимо продление.</p>
+          <div className="space-y-2 text-sm">
+            <div>Telegram: <a href="https://t.me/alpsstroy1" target="_blank" rel="noreferrer" className="text-primary underline">@alpsstroy1</a></div>
+            <div>Телефон: <a href="tel:+79520967766" className="text-primary underline">+7 (952) 096-77-66</a></div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  if (sync.days_remaining <= 1) {
+    return (
+      <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 bg-yellow-500/10 border border-yellow-500/30 text-yellow-700 dark:text-yellow-300 px-4 py-2 rounded-full text-xs font-medium shadow-lg">
+        ⏳ Пробный период заканчивается через {sync.days_remaining} дн.
+      </div>
+    );
+  }
+  return null;
+}
 
 /**
  * Get session ID from URL search params
@@ -102,12 +135,48 @@ function App() {
 
   const [streamStatus, setStreamStatus] = useState<ChatStatus>("ready");
 
+  const [authChecked, setAuthChecked] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+
   useEffect(() => {
     const token = consumeAuthTokenFromUrl();
     if (token) {
       setAuthToken(token);
     }
   }, []);
+
+  // Check authentication on load
+  useEffect(() => {
+    const checkAuth = async () => {
+      const token = getAuthToken();
+      if (!token) {
+        setAuthChecked(true);
+        setIsAuthenticated(false);
+        return;
+      }
+      try {
+        const res = await fetch("/api/auth/me", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token }),
+        });
+        if (res.ok) {
+          setIsAuthenticated(true);
+        } else {
+          setIsAuthenticated(false);
+        }
+      } catch {
+        setIsAuthenticated(false);
+      } finally {
+        setAuthChecked(true);
+      }
+    };
+    checkAuth();
+  }, []);
+
+  const handleAuthSuccess = () => {
+    setIsAuthenticated(true);
+  };
 
   // Create session dialog state (lifted to App for unified access)
   const [showCreateDialog, setShowCreateDialog] = useState(false);
@@ -386,8 +455,24 @@ function App() {
     />
   );
 
+  if (!authChecked) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-background">
+        <div className="text-center space-y-3">
+          <Shield className="size-8 mx-auto text-primary animate-pulse" />
+          <p className="text-sm text-muted-foreground">Проверка авторизации...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) {
+    return <AuthPage onAuth={handleAuthSuccess} />;
+  }
+
   return (
     <PromptInputProvider>
+      <SessionSyncGuard />
       <div className="box-border flex h-[100dvh] flex-col bg-background text-foreground px-[calc(0.75rem+var(--safe-left))] pr-[calc(0.75rem+var(--safe-right))] pt-[calc(0.75rem+var(--safe-top))] pb-1 lg:pb-[calc(0.75rem+var(--safe-bottom))] max-lg:h-[100svh] max-lg:overflow-hidden">
         <div className="mx-auto flex h-full min-h-0 w-full flex-1 flex-col gap-2 max-w-none">
           {isDesktop ? (
@@ -478,6 +563,7 @@ function App() {
                   <div className="mt-auto flex items-center justify-between pl-2 pb-2 pr-2">
                     <div className="flex items-center gap-2">
                       <ThemeToggle />
+                      <span className="text-[10px] text-muted-foreground whitespace-nowrap">Дизайн и код by Игорь Земсков</span>
                     </div>
                     <button
                       type="button"
@@ -508,13 +594,15 @@ function App() {
       <Toaster position="top-right" richColors />
 
       {/* Create Session Dialog - unified for sidebar button and keyboard shortcut */}
-      <CreateSessionDialog
-        open={showCreateDialog}
-        onOpenChange={setShowCreateDialog}
-        onConfirm={handleCreateSession}
-        fetchWorkDirs={fetchWorkDirs}
-        fetchStartupDir={fetchStartupDir}
-      />
+      <Suspense fallback={null}>
+        <CreateSessionDialog
+          open={showCreateDialog}
+          onOpenChange={setShowCreateDialog}
+          onConfirm={handleCreateSession}
+          fetchWorkDirs={fetchWorkDirs}
+          fetchStartupDir={fetchStartupDir}
+        />
+      </Suspense>
 
       {/* Mobile Sessions Sidebar */}
       {isMobileSidebarOpen ? (
@@ -557,7 +645,10 @@ function App() {
               />
             </div>
             <div className="flex items-center justify-between border-t px-3 py-2">
-              <ThemeToggle />
+              <div className="flex items-center gap-2">
+                <ThemeToggle />
+                <span className="text-[10px] text-muted-foreground whitespace-nowrap">Дизайн и код by Игорь Земсков</span>
+              </div>
             </div>
           </div>
         </div>

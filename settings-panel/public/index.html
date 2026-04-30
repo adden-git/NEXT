@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kimi Extended Settings</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: #0f0f13; color: #e0e0e0;
+  }
+  .container { max-width: 960px; margin: 0 auto; padding: 24px; }
+  h1 { margin: 0 0 8px; font-size: 22px; color: #dcb163; }
+  p.sub { margin: 0 0 24px; color: #888; font-size: 13px; }
+
+  .card {
+    background: rgba(255,255,255,0.04);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px;
+    padding: 16px 20px;
+    margin-bottom: 16px;
+  }
+  .card h2 { margin: 0 0 12px; font-size: 15px; color: #fff; font-weight: 600; }
+
+  .field { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; gap: 12px; }
+  .field label { font-size: 13px; color: #aaa; min-width: 180px; }
+  .field input, .field select, .field textarea {
+    flex: 1;
+    background: rgba(0,0,0,0.3);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px;
+    padding: 8px 10px;
+    color: #eee;
+    font-size: 13px;
+    outline: none;
+  }
+  .field input:focus, .field select:focus, .field textarea:focus { border-color: #dcb163; }
+  .field textarea { min-height: 60px; resize: vertical; font-family: monospace; }
+  .field input[type="checkbox"] { flex: 0; width: 20px; height: 20px; accent-color: #dcb163; }
+
+  .actions { display: flex; gap: 10px; margin-top: 20px; }
+  button {
+    background: #dcb163; color: #111; border: none; border-radius: 8px;
+    padding: 10px 18px; font-weight: 600; cursor: pointer; font-size: 13px;
+  }
+  button.secondary { background: rgba(255,255,255,0.1); color: #eee; }
+  button:hover { opacity: 0.9; }
+  .status { margin-top: 12px; font-size: 13px; min-height: 20px; }
+  .status.ok { color: #4caf50; }
+  .status.err { color: #ff5252; }
+
+  .raw { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🔧 Расширенные настройки Kimi</h1>
+  <p class="sub">Файл: <code>~/.kimi/config.toml</code> &nbsp;|&nbsp; Изменения применяются после перезапуска</p>
+
+  <div class="card">
+    <h2>Основные</h2>
+    <div class="field"><label>Модель по умолчанию</label><input id="default_model" type="text"></div>
+    <div class="field"><label>Thinking mode</label><input id="default_thinking" type="checkbox"></div>
+    <div class="field"><label>Yolo mode</label><input id="default_yolo" type="checkbox"></div>
+    <div class="field"><label>Тема</label>
+      <select id="theme">
+        <option value="dark">dark</option>
+        <option value="light">light</option>
+        <option value="system">system</option>
+      </select>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Loop Control</h2>
+    <div class="field"><label>Max steps per turn</label><input id="max_steps_per_turn" type="number"></div>
+    <div class="field"><label>Max retries per step</label><input id="max_retries_per_step" type="number"></div>
+    <div class="field"><label>Reserved context size</label><input id="reserved_context_size" type="number"></div>
+    <div class="field"><label>Compaction trigger ratio</label><input id="compaction_trigger_ratio" type="number" step="0.01"></div>
+  </div>
+
+  <div class="card">
+    <h2>Провайдер (managed:kimi-code)</h2>
+    <div class="field"><label>Base URL</label><input id="provider_base_url" type="text"></div>
+    <div class="field"><label>API Key</label><input id="provider_api_key" type="text" placeholder="оставьте пустым для OAuth"></div>
+  </div>
+
+  <div class="card">
+    <h2>MCP Client</h2>
+    <div class="field"><label>Tool call timeout (ms)</label><input id="tool_call_timeout_ms" type="number"></div>
+  </div>
+
+  <div class="card">
+    <h2>Raw TOML</h2>
+    <div class="field" style="flex-direction: column; align-items: stretch;">
+      <textarea id="rawToml" class="raw" spellcheck="false"></textarea>
+    </div>
+  </div>
+
+  <div class="actions">
+    <button onclick="save()">💾 Сохранить</button>
+    <button class="secondary" onclick="reload()">🔄 Загрузить заново</button>
+    <button class="secondary" onclick="restart()">♻️ Перезапустить Kimi</button>
+  </div>
+  <div id="status" class="status"></div>
+</div>
+
+<script>
+  let originalText = '';
+
+  function setStatus(msg, ok) {
+    const el = document.getElementById('status');
+    el.textContent = msg;
+    el.className = 'status ' + (ok ? 'ok' : 'err');
+  }
+
+  function getLine(key, text) {
+    const m = text.match(new RegExp('^' + key + '\\s*=\\s*(.+)$', 'm'));
+    return m ? m[1].trim() : '';
+  }
+  function setLine(key, value, text) {
+    const re = new RegExp('^(' + key + '\\s*=\\s*)(.+)$', 'm');
+    if (re.test(text)) return text.replace(re, '$1' + value);
+    return text + '\n' + key + ' = ' + value + '\n';
+  }
+  function getSectionLine(section, key, text) {
+    const secRe = new RegExp('\\[' + section.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\][\\s\\S]*?(?=\\n\\[|$)');
+    const sec = text.match(secRe);
+    if (!sec) return '';
+    const m = sec[0].match(new RegExp('^' + key + '\\s*=\\s*(.+)$', 'm'));
+    return m ? m[1].trim() : '';
+  }
+  function setSectionLine(section, key, value, text) {
+    const secRe = new RegExp('(\\[' + section.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\][\\s\\S]*?)(?=\\n\\[|$)');
+    const sec = text.match(secRe);
+    if (!sec) return text + '\n[' + section + ']\n' + key + ' = ' + value + '\n';
+    const secText = sec[0];
+    const lineRe = new RegExp('^(' + key + '\\s*=\\s*)(.+)$', 'm');
+    let newSec;
+    if (lineRe.test(secText)) {
+      newSec = secText.replace(lineRe, '$1' + value);
+    } else {
+      newSec = secText + key + ' = ' + value + '\n';
+    }
+    return text.replace(secText, newSec);
+  }
+
+  async function reload() {
+    try {
+      const r = await fetch('/api/config/raw');
+      originalText = await r.text();
+      document.getElementById('rawToml').value = originalText;
+
+      const t = originalText;
+      document.getElementById('default_model').value = getLine('default_model', t).replace(/^"|"$/g, '');
+      document.getElementById('default_thinking').checked = getLine('default_thinking', t) === 'true';
+      document.getElementById('default_yolo').checked = getLine('default_yolo', t) === 'true';
+      document.getElementById('theme').value = getLine('theme', t).replace(/^"|"$/g, '') || 'dark';
+
+      document.getElementById('max_steps_per_turn').value = getSectionLine('loop_control', 'max_steps_per_turn', t);
+      document.getElementById('max_retries_per_step').value = getSectionLine('loop_control', 'max_retries_per_step', t);
+      document.getElementById('reserved_context_size').value = getSectionLine('loop_control', 'reserved_context_size', t);
+      document.getElementById('compaction_trigger_ratio').value = getSectionLine('loop_control', 'compaction_trigger_ratio', t);
+
+      document.getElementById('provider_base_url').value = getSectionLine('providers."managed:kimi-code"', 'base_url', t).replace(/^"|"$/g, '');
+      document.getElementById('provider_api_key').value = getSectionLine('providers."managed:kimi-code"', 'api_key', t).replace(/^"|"$/g, '');
+
+      document.getElementById('tool_call_timeout_ms').value = getSectionLine('mcp.client', 'tool_call_timeout_ms', t);
+
+      setStatus('Конфиг загружен', true);
+    } catch (e) {
+      setStatus('Ошибка загрузки: ' + e.message, false);
+    }
+  }
+
+  function buildToml() {
+    let t = document.getElementById('rawToml').value;
+    t = setLine('default_model', '"' + document.getElementById('default_model').value + '"', t);
+    t = setLine('default_thinking', document.getElementById('default_thinking').checked ? 'true' : 'false', t);
+    t = setLine('default_yolo', document.getElementById('default_yolo').checked ? 'true' : 'false', t);
+    t = setLine('theme', '"' + document.getElementById('theme').value + '"', t);
+
+    t = setSectionLine('loop_control', 'max_steps_per_turn', document.getElementById('max_steps_per_turn').value, t);
+    t = setSectionLine('loop_control', 'max_retries_per_step', document.getElementById('max_retries_per_step').value, t);
+    t = setSectionLine('loop_control', 'reserved_context_size', document.getElementById('reserved_context_size').value, t);
+    t = setSectionLine('loop_control', 'compaction_trigger_ratio', document.getElementById('compaction_trigger_ratio').value, t);
+
+    t = setSectionLine('providers."managed:kimi-code"', 'base_url', '"' + document.getElementById('provider_base_url').value + '"', t);
+    t = setSectionLine('providers."managed:kimi-code"', 'api_key', '"' + document.getElementById('provider_api_key').value + '"', t);
+
+    t = setSectionLine('mcp.client', 'tool_call_timeout_ms', document.getElementById('tool_call_timeout_ms').value, t);
+    return t;
+  }
+
+  async function save() {
+    try {
+      const text = buildToml();
+      const r = await fetch('/api/config/raw', { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: text });
+      const j = await r.json();
+      if (j.ok) setStatus('Сохранено', true);
+      else setStatus('Ошибка сохранения: ' + (j.error || ''), false);
+    } catch (e) {
+      setStatus('Ошибка: ' + e.message, false);
+    }
+  }
+
+  async function restart() {
+    try {
+      setStatus('Перезапуск…', true);
+      const r = await fetch('/api/restart', { method: 'POST' });
+      const j = await r.json();
+      if (j.ok) setStatus('Kimi перезапущен', true);
+      else setStatus('Ошибка перезапуска: ' + (j.error || j.output || ''), false);
+    } catch (e) {
+      setStatus('Ошибка: ' + e.message, false);
+    }
+  }
+
+  reload();
+</script>
+</body>
+</html>

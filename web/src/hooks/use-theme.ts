@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { flushSync } from "react-dom";
 
-export type Theme = "light" | "dark";
+export type Theme = "light" | "dark" | "neon" | "matrix" | "molten";
 
 const THEME_STORAGE_KEY = "kimi-theme";
 const THEME_SWITCHING_ATTR = "data-theme-switching";
 const THEME_SWITCH_DURATION_MS = 260;
+
+const ALL_THEMES: Theme[] = ["light", "dark", "neon", "matrix", "molten"];
 
 type ThemeState = {
   theme: Theme;
@@ -22,18 +24,18 @@ type ThemeTransitionPoint = {
 type UseThemeResult = {
   theme: Theme;
   setTheme: (next: Theme) => void;
-  toggleTheme: () => void;
+  cycleTheme: () => void;
   toggleThemeWithTransition: (event?: ThemeTransitionEvent) => Promise<void>;
 };
 
 function getInitialTheme(): ThemeState {
   if (typeof window === "undefined") {
-    return { theme: "light", hasUserPreference: false };
+    return { theme: "dark", hasUserPreference: false };
   }
 
   const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
-  if (stored === "light" || stored === "dark") {
-    return { theme: stored, hasUserPreference: true };
+  if (stored && (ALL_THEMES as string[]).includes(stored)) {
+    return { theme: stored as Theme, hasUserPreference: true };
   }
 
   const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
@@ -71,6 +73,16 @@ function stopThemeSwitchingNextFrame(root: HTMLElement): void {
   });
 }
 
+function applyTheme(root: HTMLElement, theme: Theme): void {
+  root.classList.remove("dark", "neon", "matrix", "molten");
+  if (theme === "light") {
+    root.style.colorScheme = "light";
+  } else {
+    root.classList.add("dark", theme);
+    root.style.colorScheme = "dark";
+  }
+}
+
 export function useTheme(): UseThemeResult {
   const [state, setState] = useState<ThemeState>(() => getInitialTheme());
   const { theme, hasUserPreference } = state;
@@ -79,8 +91,7 @@ export function useTheme(): UseThemeResult {
   useEffect(() => {
     if (typeof document === "undefined") return;
     const root = document.documentElement;
-    root.classList.toggle("dark", theme === "dark");
-    root.style.colorScheme = theme;
+    applyTheme(root, theme);
 
     if (hasUserPreference) {
       window.localStorage.setItem(THEME_STORAGE_KEY, theme);
@@ -111,11 +122,12 @@ export function useTheme(): UseThemeResult {
     setState({ theme: next, hasUserPreference: true });
   }, []);
 
-  const toggleTheme = useCallback(() => {
-    setState((prev) => ({
-      theme: prev.theme === "dark" ? "light" : "dark",
-      hasUserPreference: true,
-    }));
+  const cycleTheme = useCallback(() => {
+    setState((prev) => {
+      const idx = ALL_THEMES.indexOf(prev.theme);
+      const next = ALL_THEMES[(idx + 1) % ALL_THEMES.length];
+      return { theme: next, hasUserPreference: true };
+    });
   }, []);
 
   const toggleThemeWithTransition = useCallback(
@@ -131,11 +143,11 @@ export function useTheme(): UseThemeResult {
           const root = document.documentElement;
           startThemeSwitching(root);
           flushSync(() => {
-            toggleTheme();
+            cycleTheme();
           });
           stopThemeSwitchingNextFrame(root);
         } else {
-          toggleTheme();
+          cycleTheme();
         }
         return;
       }
@@ -153,14 +165,12 @@ export function useTheme(): UseThemeResult {
 
       const transition = document.startViewTransition(() => {
         flushSync(() => {
-          toggleTheme();
+          cycleTheme();
         });
       });
 
       await transition.ready;
 
-      // Light→Dark: animate OLD (light) shrinking to reveal dark underneath
-      // Dark→Light: animate NEW (light) expanding to cover dark
       const pseudoElement = isDark
         ? "::view-transition-new(root)"
         : "::view-transition-old(root)";
@@ -180,8 +190,8 @@ export function useTheme(): UseThemeResult {
         stopThemeSwitching(root);
       });
     },
-    [toggleTheme],
+    [cycleTheme],
   );
 
-  return { theme, setTheme, toggleTheme, toggleThemeWithTransition };
+  return { theme, setTheme, cycleTheme, toggleThemeWithTransition };
 }

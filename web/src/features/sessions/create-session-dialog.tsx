@@ -246,13 +246,13 @@ export function CreateSessionDialog({
       <CommandDialog
         open={open}
         onOpenChange={onOpenChange}
-        title="Create New Session"
-        description="Search directories or type a new path"
+        title="Новая сессия"
+        description="Выберите папку или введите новый путь"
         showCloseButton={false}
       >
         <Command value={commandValue} onValueChange={setCommandValue}>
           <CommandInput
-            placeholder="Search directories or type a path..."
+            placeholder="Поиск папок или ввод пути..."
             value={inputValue}
             onValueChange={setInputValue}
             onKeyDown={handleKeyDown}
@@ -260,15 +260,15 @@ export function CreateSessionDialog({
           <CommandList ref={commandListRef}>
             <CommandEmpty>
               {trimmedInput
-                ? "No matching directories."
+                ? "Нет совпадений."
                 : isLoading
-                  ? "Loading directories..."
-                  : "Type a path to start a new session."}
+                  ? "Загрузка папок..."
+                  : "Введите путь для новой сессии."}
             </CommandEmpty>
 
             {showCustomPathOption && (
               <>
-                <CommandGroup heading="Custom Path">
+                <CommandGroup heading="Свой путь">
                   <CommandItem
                     className="group"
                     value={`__custom__${trimmedInput}`}
@@ -294,7 +294,7 @@ export function CreateSessionDialog({
 
             {startupDir && (
               <>
-                <CommandGroup heading="Current Directory">
+                <CommandGroup heading="Текущая папка">
                   <CommandItem
                     className="group"
                     value={startupDir}
@@ -322,7 +322,7 @@ export function CreateSessionDialog({
             )}
 
             {recentDirs.length > 0 && (
-              <CommandGroup heading="Recent Directories">
+              <CommandGroup heading="Недавние папки">
                 {recentDirs.map((dir) => (
                   <CommandItem
                     className="group"
@@ -360,21 +360,21 @@ export function CreateSessionDialog({
       <AlertDialog open={showConfirmCreate} onOpenChange={setShowConfirmCreate}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Directory Not Found</AlertDialogTitle>
+            <AlertDialogTitle>Папка не найдена</AlertDialogTitle>
             <AlertDialogDescription>
-              The directory{" "}
+              Папка{" "}
               <code className="bg-muted px-1 py-0.5 rounded text-foreground break-all">
                 {pendingPath}
               </code>{" "}
-              does not exist. Would you like to create it?
+              не существует. Создать её?
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel onClick={handleCancelCreateDir}>
-              Cancel
+              Отмена
             </AlertDialogCancel>
             <AlertDialogAction onClick={handleConfirmCreateDir}>
-              Create Directory
+              Создать папку
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -382,3 +382,6 @@ export function CreateSessionDialog({
     </>
   );
 }
+
+export default CreateSessionDialog;
+
