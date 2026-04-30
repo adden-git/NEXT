@@ -5,12 +5,14 @@ type KimiCliBrandProps = {
   className?: string;
   size?: "sm" | "md";
   showVersion?: boolean;
+  version?: string;
 };
 
 export function KimiCliBrand({
   className,
   size = "md",
   showVersion = true,
+  version,
 }: KimiCliBrandProps) {
   const textSizeClass = size === "sm" ? "text-base" : "text-lg";
   const versionPadding = size === "sm" ? "text-xs" : "text-sm";
@@ -40,7 +42,7 @@ export function KimiCliBrand({
         <span
           className={cn("text-muted-foreground font-medium", versionPadding)}
         >
-          v1.0
+          {version || kimiCliVersion}
         </span>
       )}
     </div>

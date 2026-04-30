@@ -127,6 +127,9 @@ export function SettingsDialog() {
   const [gitDiff, setGitDiff] = useState<GitDiffStats | null>(null);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [version, setVersion] = useState<string>("");
+  const [updating, setUpdating] = useState(false);
+  const [updateLogs, setUpdateLogs] = useState<string[] | null>(null);
   const touchStartY = useRef<number | null>(null);
 
   const load = useCallback(async () => {
@@ -143,6 +146,11 @@ export function SettingsDialog() {
       const diffRes = await fetch(`${API_BASE}/git-diff`, { headers: getAuthHeader() });
       if (diffRes.ok) {
         setGitDiff(await diffRes.json());
+      }
+      const verRes = await fetch(`${API_BASE}/version`, { headers: getAuthHeader() });
+      if (verRes.ok) {
+        const verData = await verRes.json();
+        setVersion(verData.version || "");
       }
       setCfg(cfgData.config as ExtendedConfig);
       setEnv({
@@ -598,6 +606,56 @@ export function SettingsDialog() {
                     </div>
                   </div>
                 )}
+              </section>
+
+              <Separator />
+
+              {/* Version & Update */}
+              <section>
+                <h3 className="text-sm font-medium text-muted-foreground mb-3 flex items-center gap-2">
+                  <span>🔄</span> Версия и обновление
+                </h3>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm">Текущая версия</span>
+                    <span className="text-xs font-mono bg-muted px-2 py-0.5 rounded">{version || "—"}</span>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={updating}
+                    onClick={async () => {
+                      setUpdating(true);
+                      setUpdateLogs(null);
+                      try {
+                        const res = await fetch(`${API_BASE}/update`, {
+                          method: "POST",
+                          headers: getAuthHeader(),
+                        });
+                        const data = await res.json();
+                        if (data.success) {
+                          setUpdateLogs(data.logs);
+                          toast.success("Обновление выполнено", { description: "Сервер перезапущен" });
+                        } else {
+                          toast.error("Ошибка обновления", { description: data.error || "Неизвестная ошибка" });
+                        }
+                      } catch (e: any) {
+                        toast.error("Ошибка обновления", { description: e.message });
+                      } finally {
+                        setUpdating(false);
+                      }
+                    }}
+                  >
+                    {updating ? "Обновление..." : "Обновить приложение"}
+                  </Button>
+                  {updateLogs && (
+                    <div className="max-h-48 overflow-y-auto border rounded-md bg-muted/10 p-2 text-[11px] font-mono space-y-1">
+                      {updateLogs.map((line, i) => (
+                        <div key={i} className="break-all">{line}</div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </section>
 
             </div>

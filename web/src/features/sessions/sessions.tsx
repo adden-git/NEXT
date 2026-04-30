@@ -198,7 +198,15 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
       .replace(WHITESPACE_REGEX, " ")
       .trim();
   }, []);
+  const [appVersion, setAppVersion] = useState<string>("");
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+
+  useEffect(() => {
+    fetch("/api/config/version", { headers: { Authorization: `Bearer ${getAuthToken() || ""}` } })
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => { if (data?.version) setAppVersion(data.version); })
+      .catch(() => {});
+  }, []);
   const [deleteConfirm, setDeleteConfirm] = useState<{ open: boolean; sessionId: string; sessionTitle: string }>({
     open: false,
     sessionId: "",
@@ -690,7 +698,7 @@ export const SessionsSidebar = memo(function SessionsSidebarComponent({
       <aside className="flex h-full min-h-0 flex-col">
         <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-hidden">
           <div className="flex items-center justify-between px-3 pt-2">
-            <KimiCliBrand size="sm" showVersion={true} />
+            <KimiCliBrand size="sm" showVersion={true} version={appVersion} />
             {onClose && (
               <button
                 type="button"

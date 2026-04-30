@@ -13,6 +13,8 @@ from kimi_cli import logger
 from kimi_cli.config import Config, LLMModel, get_config_file, load_config, save_config
 from kimi_cli.llm import ProviderType, derive_model_capabilities
 from kimi_cli.utils.subprocess_env import get_clean_env
+import subprocess
+
 from kimi_cli.web.auth_users import get_sync_status
 from kimi_cli.web.runner.process import KimiCLIRunner
 
@@ -468,3 +470,68 @@ async def get_license() -> dict[str, Any]:
         "expires_at": info.get("_expires"),
         "trial_days": 7,
     }
+
+
+@router.get("/version", summary="Get current app version")
+async def get_version() -> dict[str, str]:
+    """Return current version from pyproject.toml."""
+    try:
+        import tomllib
+    except ImportError:
+        import tomli as tomllib
+    config_path = Path(__file__).resolve().parents[4] / "pyproject.toml"
+    try:
+        with open(config_path, "rb") as f:
+            data = tomllib.load(f)
+        return {"version": data.get("project", {}).get("version", "unknown")}
+    except Exception:
+        return {"version": "unknown"}
+
+
+@router.post("/update", summary="Update app from git and rebuild")
+async def post_update(request: Request) -> dict[str, Any]:
+    """Run git pull, npm build, copy static, pm2 restart."""
+    startup_dir = Path(request.app.state.startup_dir)
+    logs: list[str] = []
+
+    def run(cmd: list[str], cwd: Path) -> str:
+        try:
+            result = subprocess.run(
+                cmd, cwd=str(cwd), capture_output=True, text=True, timeout=300
+            )
+            return (result.stdout + result.stderr).strip()
+        except subprocess.TimeoutExpired:
+            return f"TIMEOUT: {' '.join(cmd)}"
+        except Exception as e:
+            return f"ERROR: {e}"
+
+    logs.append("=== git pull ===")
+    logs.append(run(["git", "pull", "origin", "main"], startup_dir))
+
+    logs.append("=== npm build ===")
+    web_dir = startup_dir / "web"
+    env = os.environ.copy()
+    env["VITE_DISABLE_TYPESCRIPT"] = "1"
+    logs.append(run(["npm", "run", "build"], web_dir))
+
+    logs.append("=== copy static ===")
+    dist_dir = web_dir / "dist"
+    static_dir = startup_dir / "src" / "kimi_cli" / "web" / "static"
+    if dist_dir.exists() and static_dir.exists():
+        for item in dist_dir.iterdir():
+            dest = static_dir / item.name
+            if item.is_dir():
+                import shutil
+                if dest.exists():
+                    shutil.rmtree(dest)
+                shutil.copytree(item, dest)
+            else:
+                shutil.copy2(item, dest)
+        logs.append("OK")
+    else:
+        logs.append("MISSING dirs")
+
+    logs.append("=== pm2 restart ===")
+    logs.append(run(["pm2", "restart", "kimi-dev-5500"], startup_dir))
+
+    return {"success": True, "logs": logs}

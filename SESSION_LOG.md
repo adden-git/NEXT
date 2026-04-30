@@ -2,6 +2,30 @@
 
 ---
 
+## 2026-04-30 — License obfuscation + HMAC, GitHub push prep
+
+**Что реально сделано и проверено:**
+
+| Задача | Статус | Как проверено |
+|--------|--------|---------------|
+| Удалён отдельный `license.py` | ✅ | Логика встроена в `auth_users.py` |
+| Удалён `LicenseOverlay.tsx` | ✅ | Встроен `SessionSyncGuard` в `App.tsx` |
+| Файл лицензии: `.kimi/.license` → `.kimi/.session_cache` | ✅ | `auth_users.py` — `_SYNC_FILE` |
+| HMAC-SHA256 подпись данных | ✅ | `_pack_sync()` / `_unpack_sync()` с `_sync_key()` |
+| Обфусцированные имена полей (`_t`, `_d`, `_s`, `_ok`, `_exp`) | ✅ | `auth_users.py` |
+| Middleware блокирует API при expired sync | ✅ | `auth.py` — `check_sync()` → 403 |
+| Endpoint `/api/config/license` работает | ✅ | curl → 200, valid=true, days_remaining=6 |
+| Git commit готов | ✅ | `a393cf13` — 48 files, 5464 insertions |
+| Сборка frontend + деплой | ✅ | `npm run build` 4м 26с, pm2 restart |
+
+**Где спрятана защита:**
+- Файл: `~/.kimi/.session_cache` (HMAC-подписанный JSON)
+- Логика: `src/kimi_cli/web/auth_users.py` — функции `get_sync_status()`, `check_sync()`, `_pack_sync()`, `_unpack_sync()`
+- Проверка доступа: `src/kimi_cli/web/auth.py` — в `AuthMiddleware.dispatch()` после verify_token
+- UI блокировка: `web/src/App.tsx` — `SessionSyncGuard` компонент
+
+---
+
 ## 2026-04-30 — Settings: manual save, no builtin skills, OpenRouter/Fireworks presets
 
 **Что реально сделано и проверено:**
