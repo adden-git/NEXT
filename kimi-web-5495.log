@@ -1,0 +1,31 @@
+INFO:     Started server process [90808]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:5495 (Press CTRL+C to quit)
++================================================================+
+| ██╗  ██╗██╗███╗   ███╗██╗     ██████╗ ██████╗ ██████╗ ███████╗ |
+| ██║ ██╔╝██║████╗ ████║██║    ██╔════╝██╔═══██╗██╔══██╗██╔════╝ |
+| █████╔╝ ██║██╔████╔██║██║    ██║     ██║   ██║██║  ██║█████╗   |
+| ██╔═██╗ ██║██║╚██╔╝██║██║    ██║     ██║   ██║██║  ██║██╔══╝   |
+| ██║  ██╗██║██║ ╚═╝ ██║██║    ╚██████╗╚██████╔╝██████╔╝███████╗ |
+| ╚═╝  ╚═╝╚═╝╚═╝     ╚═╝╚═╝     ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝ |
+|                                                                |
+|                   WEB UI (Technical Preview)                   |
+|                                                                |
+|----------------------------------------------------------------|
+|                                                                |
+|   ➜  Local    http://127.0.0.1:5495                            |
+|                                                                |
+|----------------------------------------------------------------|
+|                                                                |
+|   Tips:                                                        |
+|     • Use -n / --network to share on LAN                       |
+|     • Use --network --public for public access                 |
+|                                                                |
++================================================================+
+INFO:     94.241.142.95:0 - "GET / HTTP/1.1" 200 OK
+INFO:     94.241.142.95:0 - "GET / HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [90808]
