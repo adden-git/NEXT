@@ -21,10 +21,13 @@ import {
   useImperativeHandle,
   useMemo,
   useRef,
+  useState,
   type ComponentPropsWithoutRef,
 } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Loader2Icon, HistoryIcon } from "lucide-react";
 
 export type VirtualizedMessageListProps = {
   messages: LiveMessage[];
@@ -39,6 +42,12 @@ export type VirtualizedMessageListProps = {
   onAtBottomChange?: (atBottom: boolean) => void;
   /** Callback to fork session from before a specific turn */
   onForkSession?: (turnIndex: number) => void;
+  /** Callback to load older messages */
+  onLoadOlder?: () => void;
+  /** Whether older messages are being loaded */
+  isLoadingOlder?: boolean;
+  /** Total message count (null if unknown) */
+  totalMessageCount?: number | null;
 };
 
 export type VirtualizedMessageListHandle = {
@@ -156,11 +165,15 @@ function VirtualizedMessageListComponent(
     highlightedMessageIndex = -1,
     onAtBottomChange,
     onForkSession,
+    onLoadOlder,
+    isLoadingOlder = false,
+    totalMessageCount = null,
   }: VirtualizedMessageListProps,
   ref: React.Ref<VirtualizedMessageListHandle>,
 ) {
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const scrollerRef = useRef<HTMLElement | null>(null);
+  const [loadMoreVisible, setLoadMoreVisible] = useState(true);
 
   // Filtered messages list (excluding message-id) aligned with listItems indices
   const filteredMessages = useMemo(
@@ -232,31 +245,65 @@ function VirtualizedMessageListComponent(
     [listItems.length],
   );
 
+  const hasMoreHistory =
+    totalMessageCount !== null &&
+    totalMessageCount > messages.length &&
+    loadMoreVisible;
+
+  const handleLoadOlder = useCallback(() => {
+    if (isLoadingOlder || !onLoadOlder) return;
+    onLoadOlder();
+    // Hide the button after clicking; it will reappear if more messages exist
+    setLoadMoreVisible(false);
+    setTimeout(() => setLoadMoreVisible(true), 3000);
+  }, [isLoadingOlder, onLoadOlder]);
+
   return (
-    <Virtuoso
-      key={conversationKey}
-      ref={virtuosoRef}
-      data={listItems}
-      className="h-full"
-      scrollerRef={handleScrollerRef}
-      followOutput={handleFollowOutput}
-      defaultItemHeight={160}
-      increaseViewportBy={{ top: 400, bottom: 400 }}
-      overscan={200}
-      minOverscanItemCount={4}
-      atBottomStateChange={handleAtBottomChange}
-      initialTopMostItemIndex={{
-        index: Math.max(0, listItems.length - 1),
-        align: "end",
-      }}
-      components={{
-        Scroller: VirtuosoScroller,
-        List: VirtuosoList,
-      }}
-      computeItemKey={(_index: number, item: ConversationListItem) =>
-        item.message.id
-      }
-      itemContent={(_index, item) => {
+    <div className="relative h-full flex flex-col">
+      {hasMoreHistory && (
+        <div className="shrink-0 flex justify-center py-2 border-b border-border/40 bg-muted/20">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleLoadOlder}
+            disabled={isLoadingOlder}
+            className="text-xs gap-1.5"
+          >
+            {isLoadingOlder ? (
+              <Loader2Icon className="size-3.5 animate-spin" />
+            ) : (
+              <HistoryIcon className="size-3.5" />
+            )}
+            {isLoadingOlder
+              ? "Загрузка..."
+              : `Загрузить предыдущие (${totalMessageCount! - messages.length} скрыто)`}
+          </Button>
+        </div>
+      )}
+      <Virtuoso
+        key={conversationKey}
+        ref={virtuosoRef}
+        data={listItems}
+        className="flex-1"
+        scrollerRef={handleScrollerRef}
+        followOutput={handleFollowOutput}
+        defaultItemHeight={160}
+        increaseViewportBy={{ top: 400, bottom: 400 }}
+        overscan={200}
+        minOverscanItemCount={4}
+        atBottomStateChange={handleAtBottomChange}
+        initialTopMostItemIndex={{
+          index: Math.max(0, listItems.length - 1),
+          align: "end",
+        }}
+        components={{
+          Scroller: VirtuosoScroller,
+          List: VirtuosoList,
+        }}
+        computeItemKey={(_index: number, item: ConversationListItem) =>
+          item.message.id
+        }
+        itemContent={(_index, item) => {
         const message = item.message;
 
         if (message.variant === "status") {
@@ -338,6 +385,7 @@ function VirtualizedMessageListComponent(
         );
       }}
     />
+    </div>
   );
 }
 

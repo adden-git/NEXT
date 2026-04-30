@@ -92,6 +92,12 @@ type ChatWorkspaceProps = {
   onForkSession?: (turnIndex: number) => void;
   /** Error message from the session stream */
   errorMessage?: string;
+  /** Load older messages from history */
+  onLoadOlder?: () => void;
+  /** Whether older messages are being loaded */
+  isLoadingOlder?: boolean;
+  /** Total message count (null if unknown) */
+  totalMessageCount?: number | null;
 };
 
 type ToolApproval = NonNullable<LiveMessage["toolCall"]>["approval"];
@@ -124,6 +130,9 @@ export const ChatWorkspace = memo(function ChatWorkspaceComponent({
   onPlanModeChange,
   onForkSession,
   errorMessage,
+  onLoadOlder,
+  isLoadingOlder,
+  totalMessageCount,
 }: ChatWorkspaceProps): ReactElement {
   const [blocksExpanded, setBlocksExpanded] = useState(false);
   const [isFilesPanelOpen, setIsFilesPanelOpen] = useState(false);
@@ -309,6 +318,9 @@ export const ChatWorkspace = memo(function ChatWorkspaceComponent({
                 isSearchOpen={isSearchOpen}
                 onSearchOpenChange={setIsSearchOpen}
                 onForkSession={onForkSession}
+                onLoadOlder={onLoadOlder}
+                isLoadingOlder={isLoadingOlder}
+                totalMessageCount={totalMessageCount}
               />
             </div>
 

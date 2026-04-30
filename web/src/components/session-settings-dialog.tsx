@@ -607,6 +607,7 @@ export function SessionSettingsDialog({ sessionId }: { sessionId: string }) {
   const [refactoring, setRefactoring] = useState(false);
   const [refactorResult, setRefactorResult] = useState<any>(null);
   const saveTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const paramsRef = useRef<SessionModelParams>({ ...DEFAULT_PARAMS });
 
   const loadParams = useCallback(async () => {
     if (!sessionId || sessionId === "undefined") {
@@ -620,12 +621,14 @@ export function SessionSettingsDialog({ sessionId }: { sessionId: string }) {
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      setParams({
+      const loadedParams = {
         temperature: data.temperature !== null ? Number(data.temperature) : DEFAULT_PARAMS.temperature,
         top_p: data.top_p !== null ? Number(data.top_p) : DEFAULT_PARAMS.top_p,
         max_tokens: data.max_tokens !== null ? Number(data.max_tokens) : DEFAULT_PARAMS.max_tokens,
-        thinking_keep: data.thinking_keep || DEFAULT_PARAMS.thinking_keep,
-      });
+        thinking_keep: data.thinking_keep ?? DEFAULT_PARAMS.thinking_keep,
+      };
+      setParams(loadedParams);
+      paramsRef.current = loadedParams;
       setDirty(false);
     } catch (e: any) {
       toast.error("Не удалось загрузить параметры сессии", { description: e.message });
@@ -672,7 +675,7 @@ export function SessionSettingsDialog({ sessionId }: { sessionId: string }) {
           temperature: current.temperature,
           top_p: current.top_p,
           max_tokens: current.max_tokens,
-          thinking_keep: current.thinking_keep || undefined,
+          thinking_keep: current.thinking_keep ?? undefined,
         }),
       });
       const data = await res.json();
@@ -695,9 +698,10 @@ export function SessionSettingsDialog({ sessionId }: { sessionId: string }) {
     setDirty(true);
     if (saveTimeout.current) clearTimeout(saveTimeout.current);
     saveTimeout.current = setTimeout(() => {
-      doSave(params);
+      // Read latest params from ref to avoid stale closure
+      doSave(paramsRef.current);
     }, 1200);
-  }, [params, doSave]);
+  }, [doSave]);
 
   useEffect(() => {
     return () => {
@@ -706,7 +710,11 @@ export function SessionSettingsDialog({ sessionId }: { sessionId: string }) {
   }, []);
 
   const updateParam = <K extends keyof SessionModelParams>(key: K, value: SessionModelParams[K]) => {
-    setParams((prev) => ({ ...prev, [key]: value }));
+    setParams((prev) => {
+      const next = { ...prev, [key]: value };
+      paramsRef.current = next;
+      return next;
+    });
     scheduleSave();
   };
 
@@ -729,7 +737,15 @@ export function SessionSettingsDialog({ sessionId }: { sessionId: string }) {
   }, [sessionId]);
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={(newOpen) => {
+      if (!newOpen && dirty && saveTimeout.current) {
+        // Force save immediately when closing dialog with pending changes
+        clearTimeout(saveTimeout.current);
+        saveTimeout.current = null;
+        doSave(paramsRef.current);
+      }
+      setOpen(newOpen);
+    }}>
       <DialogTrigger asChild>
         <Button variant="ghost" size="icon" aria-label="Параметры сессии" title="Параметры сессии">
           <Settings className="size-4" />

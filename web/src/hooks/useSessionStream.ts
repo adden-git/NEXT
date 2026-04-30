@@ -300,6 +300,7 @@ export function useSessionStream(
   const [isReplayingHistory, setIsReplayingHistory] = useState(true);
   const [slashCommands, setSlashCommands] = useState<SlashCommandDef[]>([]);
   const [isLoadingOlder, setIsLoadingOlder] = useState(false);
+  const [totalMessageCount, setTotalMessageCount] = useState<number | null>(null);
   const totalMessageCountRef = useRef<number | null>(null);
 
   // Refs
@@ -2092,6 +2093,8 @@ export function useSessionStream(
           const total = payload?.total_messages ?? 0;
           const shown = payload?.shown_messages ?? 0;
           const skipped = payload?.skipped_messages ?? 0;
+          totalMessageCountRef.current = total;
+          setTotalMessageCount(total);
           if (skipped > 0) {
             toast.info(
               `История усечена: показано ${shown} из ${total} сообщений`,
@@ -2802,7 +2805,10 @@ export function useSessionStream(
     try {
       const token = getAuthToken();
       const basePath = baseUrl || "";
-      const url = `${basePath}/api/sessions/${sessionId}/history?offset=0&limit=200`;
+      // Calculate offset: fetch messages before the currently loaded ones
+      const offset = 0;
+      const limit = 200;
+      const url = `${basePath}/api/sessions/${sessionId}/history?offset=${offset}&limit=${limit}`;
       const res = await fetch(url, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
@@ -2812,24 +2818,212 @@ export function useSessionStream(
       }
       const data = await res.json();
       const events: Array<{ jsonrpc: string; method: string; params?: unknown; id?: string | number }> = data.events || [];
-      totalMessageCountRef.current = data.total ?? null;
+      const total = data.total ?? null;
+      totalMessageCountRef.current = total;
+      setTotalMessageCount(total);
+
       // Process events into LiveMessages and prepend them
       const olderMessages: LiveMessage[] = [];
-      const tempTurnCounter = 0;
+      let tempTurnCounter = 0;
+      let currentThinking = "";
+      let currentText = "";
+      let thinkingMsgId: string | null = null;
+      let textMsgId: string | null = null;
+
       for (const event of events) {
         if (event.method === "event" || event.method === "request") {
           const params = event.params as { type: string; payload: unknown } | undefined;
           if (!params) continue;
-          const wireEvent = { type: params.type, payload: params.payload } as WireEvent;
-          // We can't easily replay all event types into messages without full state.
-          // For now, just show a placeholder that history can be loaded.
-          // A simpler approach: show a "Load more" button that fetches and appends.
+
+          switch (params.type) {
+            case "TurnBegin": {
+              const userInput = (params.payload as { user_input?: string | Array<{ type: string }> })?.user_input;
+              const userText = typeof userInput === "string" ? userInput : JSON.stringify(userInput);
+              const userMsg: LiveMessage = {
+                id: `older-user-${tempTurnCounter}`,
+                role: "user",
+                turnIndex: tempTurnCounter,
+                content: userText,
+              };
+              olderMessages.push(userMsg);
+              tempTurnCounter++;
+              // Reset accumulators for new turn
+              currentThinking = "";
+              currentText = "";
+              thinkingMsgId = null;
+              textMsgId = null;
+              break;
+            }
+            case "ContentPart": {
+              const cp = params.payload as { type: string; think?: string; text?: string } | undefined;
+              if (!cp) break;
+              if (cp.type === "think" && cp.think) {
+                currentThinking += cp.think;
+                if (!thinkingMsgId) {
+                  thinkingMsgId = `older-think-${tempTurnCounter}-${olderMessages.length}`;
+                  olderMessages.push({
+                    id: thinkingMsgId,
+                    role: "assistant",
+                    variant: "thinking",
+                    thinking: currentThinking,
+                    isStreaming: false,
+                  });
+                } else {
+                  const idx = olderMessages.findIndex((m) => m.id === thinkingMsgId);
+                  if (idx !== -1) {
+                    olderMessages[idx] = { ...olderMessages[idx], thinking: currentThinking };
+                  }
+                }
+              } else if (cp.type === "text" && cp.text) {
+                currentText += cp.text;
+                if (!textMsgId) {
+                  textMsgId = `older-text-${tempTurnCounter}-${olderMessages.length}`;
+                  olderMessages.push({
+                    id: textMsgId,
+                    role: "assistant",
+                    variant: "text",
+                    turnIndex: tempTurnCounter > 0 ? tempTurnCounter - 1 : undefined,
+                    content: currentText,
+                    isStreaming: false,
+                  });
+                } else {
+                  const idx = olderMessages.findIndex((m) => m.id === textMsgId);
+                  if (idx !== -1) {
+                    olderMessages[idx] = { ...olderMessages[idx], content: currentText };
+                  }
+                }
+              }
+              break;
+            }
+            case "ToolCall": {
+              const tc = params.payload as { id: string; function: { name: string; arguments: string } } | undefined;
+              if (!tc) break;
+              let parsedInput: unknown;
+              try {
+                parsedInput = JSON.parse(tc.function.arguments || "{}");
+              } catch {
+                parsedInput = undefined;
+              }
+              olderMessages.push({
+                id: `older-tool-${tc.id}`,
+                role: "assistant",
+                variant: "tool",
+                toolCall: {
+                  title: tc.function.name,
+                  type: "tool-call",
+                  state: "input-available",
+                  toolCallId: tc.id,
+                  input: parsedInput,
+                },
+                isStreaming: false,
+              });
+              break;
+            }
+            case "ToolResult": {
+              const tr = params.payload as { tool_call_id: string; return_value: { is_error: boolean; output: Array<{ text?: string }> | string; message: string } } | undefined;
+              if (!tr) break;
+              const idx = olderMessages.findIndex((m) => m.toolCall?.toolCallId === tr.tool_call_id);
+              if (idx !== -1) {
+                const outputStr = Array.isArray(tr.return_value.output)
+                  ? tr.return_value.output.map((p) => p.text ?? "").filter(Boolean).join("\n")
+                  : tr.return_value.output;
+                olderMessages[idx] = {
+                  ...olderMessages[idx],
+                  toolCall: {
+                    ...olderMessages[idx].toolCall!,
+                    state: tr.return_value.is_error ? "output-error" : "output-available",
+                    output: outputStr || undefined,
+                    message: tr.return_value.message || undefined,
+                    isError: tr.return_value.is_error,
+                    errorText: tr.return_value.is_error ? tr.return_value.message || undefined : undefined,
+                  },
+                  isStreaming: false,
+                };
+              }
+              break;
+            }
+            case "ApprovalRequest": {
+              const ar = params.payload as { id: string; action: string; description: string; sender: string; tool_call_id: string } | undefined;
+              if (!ar) break;
+              const idx = olderMessages.findIndex((m) => m.toolCall?.toolCallId === ar.tool_call_id);
+              if (idx !== -1) {
+                olderMessages[idx] = {
+                  ...olderMessages[idx],
+                  toolCall: {
+                    ...olderMessages[idx].toolCall!,
+                    state: "approval-requested",
+                    approval: {
+                      id: ar.id,
+                      action: ar.action,
+                      description: ar.description,
+                      sender: ar.sender,
+                      toolCallId: ar.tool_call_id,
+                      submitted: false,
+                      resolved: false,
+                      sourceKind: null,
+                      sourceDescription: null,
+                    },
+                  },
+                };
+              }
+              break;
+            }
+            case "ApprovalRequestResolved": {
+              const arr = params.payload as { request_id: string; response: unknown; feedback?: string } | undefined;
+              if (!arr) break;
+              const idx = olderMessages.findIndex((m) => m.toolCall?.approval?.id === arr.request_id);
+              if (idx !== -1) {
+                const approved = arr.response === true || arr.response === "approve" || arr.response === "approved";
+                olderMessages[idx] = {
+                  ...olderMessages[idx],
+                  toolCall: {
+                    ...olderMessages[idx].toolCall!,
+                    state: approved ? "input-available" : "output-denied",
+                    approval: {
+                      ...olderMessages[idx].toolCall!.approval!,
+                      submitted: true,
+                      resolved: true,
+                      approved,
+                      response: arr.response as string,
+                      reason: arr.feedback,
+                    },
+                  },
+                };
+              }
+              break;
+            }
+            case "SessionNotice": {
+              const sn = params.payload as { text?: string } | undefined;
+              if (sn?.text) {
+                olderMessages.push({
+                  id: `older-notice-${olderMessages.length}`,
+                  role: "assistant",
+                  variant: "status",
+                  content: sn.text,
+                });
+              }
+              break;
+            }
+            default:
+              break;
+          }
         }
       }
-      // Simpler: just show a toast with info
-      if (data.total > currentCount) {
-        toast.info(`История: ${data.total} сообщений всего`, {
-          description: `Загружено ${currentCount}, ещё ${data.total - currentCount} доступно через API`,
+
+      // Prepend older messages to current messages
+      if (olderMessages.length > 0) {
+        setMessages((prev) => {
+          // Avoid duplicates by checking IDs
+          const existingIds = new Set(prev.map((m) => m.id));
+          const newMessages = olderMessages.filter((m) => !existingIds.has(m.id));
+          return [...newMessages, ...prev];
+        });
+      }
+
+      // Show toast with info
+      if (total !== null && total > currentCount) {
+        toast.info(`История: ${total} сообщений всего`, {
+          description: `Загружено ещё ${olderMessages.length}, всего на экране ${currentCount + olderMessages.length}`,
           duration: 4000,
         });
       }
@@ -2838,7 +3032,7 @@ export function useSessionStream(
     } finally {
       setIsLoadingOlder(false);
     }
-  }, [sessionId, isLoadingOlder, messages.length, baseUrl]);
+  }, [sessionId, isLoadingOlder, messages.length, baseUrl, setMessages]);
 
   const loadOlderMessagesRef = useRef(loadOlderMessages);
   loadOlderMessagesRef.current = loadOlderMessages;
@@ -2992,7 +3186,7 @@ export function useSessionStream(
     sendSetPlanMode,
     slashCommands,
     isLoadingOlder,
-    totalMessageCount: totalMessageCountRef.current,
+    totalMessageCount,
     loadOlderMessages: loadOlderMessagesRef.current,
   };
 }

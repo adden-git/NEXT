@@ -133,6 +133,8 @@ export function SettingsDialog() {
   const [updating, setUpdating] = useState(false);
   const [updateLogs, setUpdateLogs] = useState<string[] | null>(null);
   const touchStartY = useRef<number | null>(null);
+  const cfgRef = useRef<ExtendedConfig | null>(null);
+  const envRef = useRef<ModelEnvVars>({ ...DEFAULT_ENV });
 
   const load = useCallback(async () => {
     try {
@@ -154,13 +156,17 @@ export function SettingsDialog() {
         const verData = await verRes.json();
         setVersion(verData.version || "");
       }
-      setCfg(cfgData.config as ExtendedConfig);
-      setEnv({
+      const loadedCfg = cfgData.config as ExtendedConfig;
+      const loadedEnv = {
         temperature: envData.temperature !== null ? Number(envData.temperature) : DEFAULT_ENV.temperature,
         top_p: envData.top_p !== null ? Number(envData.top_p) : DEFAULT_ENV.top_p,
         max_tokens: envData.max_tokens !== null ? Number(envData.max_tokens) : DEFAULT_ENV.max_tokens,
-        thinking_keep: envData.thinking_keep || "",
-      });
+        thinking_keep: envData.thinking_keep ?? "",
+      };
+      setCfg(loadedCfg);
+      cfgRef.current = loadedCfg;
+      setEnv(loadedEnv);
+      envRef.current = loadedEnv;
       setDirty(false);
     } catch (e: any) {
       toast.error("Не удалось загрузить конфиг", { description: e.message });
@@ -172,7 +178,11 @@ export function SettingsDialog() {
   }, [open, load]);
 
   const doSave = useCallback(async (currentCfg: ExtendedConfig | null, currentEnv: ModelEnvVars) => {
-    if (!currentCfg) return;
+    if (!currentCfg) {
+      // If cfg hasn't loaded but env is dirty, still try to save env
+      if (!cfgRef.current) return;
+      currentCfg = cfgRef.current;
+    }
     setSaving(true);
     try {
       const [cfgRes, envRes] = await Promise.all([
@@ -216,6 +226,7 @@ export function SettingsDialog() {
   const updateField = <K extends keyof ExtendedConfig>(key: K, value: ExtendedConfig[K]) => {
     setCfg((prev) => {
       const next = prev ? { ...prev, [key]: value } : prev;
+      cfgRef.current = next;
       return next;
     });
     markDirty();
@@ -224,6 +235,7 @@ export function SettingsDialog() {
   const updateLoop = (key: keyof ExtendedConfig["loop_control"], value: number) => {
     setCfg((prev) => {
       const next = prev ? { ...prev, loop_control: { ...prev.loop_control, [key]: value } } : prev;
+      cfgRef.current = next;
       return next;
     });
     markDirty();
@@ -234,7 +246,9 @@ export function SettingsDialog() {
       if (!prev) return prev;
       const providers = { ...prev.providers };
       providers[name] = { ...providers[name], [field]: value };
-      return { ...prev, providers };
+      const next = { ...prev, providers };
+      cfgRef.current = next;
+      return next;
     });
     markDirty();
   };
@@ -244,13 +258,19 @@ export function SettingsDialog() {
       if (!prev) return prev;
       const services = { ...prev.services };
       services[svc] = { ...(services[svc] || {}), [field]: value } as any;
-      return { ...prev, services };
+      const next = { ...prev, services };
+      cfgRef.current = next;
+      return next;
     });
     markDirty();
   };
 
   const updateEnv = (patch: Partial<ModelEnvVars>) => {
-    setEnv((prev) => ({ ...prev, ...patch }));
+    setEnv((prev) => {
+      const next = { ...prev, ...patch };
+      envRef.current = next;
+      return next;
+    });
     markDirty();
   };
 
@@ -273,7 +293,13 @@ export function SettingsDialog() {
   };
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog open={open} onOpenChange={(newOpen) => {
+      if (!newOpen && dirty) {
+        // Force save immediately when closing dialog with pending changes
+        doSave(cfgRef.current, envRef.current);
+      }
+      setOpen(newOpen);
+    }}>
       <DialogTrigger asChild>
         <Button variant="ghost" size="icon" aria-label="Настройки" title="Настройки">
           <Settings className="size-4" />
@@ -297,7 +323,7 @@ export function SettingsDialog() {
             )}
           </div>
           <div className="flex items-center gap-2">
-            <Button size="sm" onClick={() => doSave(cfg, env)} disabled={saving || !cfg}>
+            <Button size="sm" onClick={() => doSave(cfgRef.current, envRef.current)} disabled={saving || !cfgRef.current}>
               {saving ? "Сохранение..." : "Сохранить"}
             </Button>
             <Button variant="ghost" size="icon" onClick={() => setOpen(false)} aria-label="Закрыть">
@@ -471,7 +497,9 @@ export function SettingsDialog() {
                             if (!prev) return prev;
                             const providers = { ...prev.providers };
                             delete providers[name];
-                            return { ...prev, providers };
+                            const next = { ...prev, providers };
+                            cfgRef.current = next;
+                            return next;
                           });
                           markDirty();
                         }} aria-label="Удалить провайдер">
@@ -494,7 +522,9 @@ export function SettingsDialog() {
                       if (!name || cfg.providers[name]) return;
                       setCfg((prev) => {
                         if (!prev) return prev;
-                        return { ...prev, providers: { ...prev.providers, [name]: { type: "openai_legacy", base_url: "", api_key: "" } } };
+                        const next = { ...prev, providers: { ...prev.providers, [name]: { type: "openai_legacy", base_url: "", api_key: "" } } };
+                        cfgRef.current = next;
+                        return next;
                       });
                       markDirty();
                     }}>+ Свой провайдер</Button>
@@ -502,7 +532,9 @@ export function SettingsDialog() {
                       if (cfg.providers["openrouter"]) { toast.error("OpenRouter уже добавлен"); return; }
                       setCfg((prev) => {
                         if (!prev) return prev;
-                        return { ...prev, providers: { ...prev.providers, openrouter: { type: "openai_legacy", base_url: "https://openrouter.ai/api/v1", api_key: "" } } };
+                        const next = { ...prev, providers: { ...prev.providers, openrouter: { type: "openai_legacy", base_url: "https://openrouter.ai/api/v1", api_key: "" } } };
+                        cfgRef.current = next;
+                        return next;
                       });
                       markDirty();
                     }}>+ OpenRouter</Button>
@@ -510,7 +542,9 @@ export function SettingsDialog() {
                       if (cfg.providers["fireworks"]) { toast.error("Fireworks уже добавлен"); return; }
                       setCfg((prev) => {
                         if (!prev) return prev;
-                        return { ...prev, providers: { ...prev.providers, fireworks: { type: "openai_legacy", base_url: "https://api.fireworks.ai/inference/v1", api_key: "" } } };
+                        const next = { ...prev, providers: { ...prev.providers, fireworks: { type: "openai_legacy", base_url: "https://api.fireworks.ai/inference/v1", api_key: "" } } };
+                        cfgRef.current = next;
+                        return next;
                       });
                       markDirty();
                     }}>+ Fireworks</Button>
@@ -545,7 +579,12 @@ export function SettingsDialog() {
                 <h3 className="text-sm font-medium text-muted-foreground mb-3">MCP</h3>
                 <div>
                   <label htmlFor="tool_call_timeout_ms" className="text-sm font-medium">Таймаут вызова инструмента (мс)</label>
-                  <Input id="tool_call_timeout_ms" type="number" value={cfg.mcp.client.tool_call_timeout_ms} onChange={(e) => setCfg((prev) => prev ? { ...prev, mcp: { client: { tool_call_timeout_ms: Number(e.target.value) } } } : prev)} />
+                  <Input id="tool_call_timeout_ms" type="number" value={cfg.mcp.client.tool_call_timeout_ms} onChange={(e) => setCfg((prev) => {
+                    if (!prev) return prev;
+                    const next = { ...prev, mcp: { client: { tool_call_timeout_ms: Number(e.target.value) } } };
+                    cfgRef.current = next;
+                    return next;
+                  })} />
                 </div>
               </section>
 
