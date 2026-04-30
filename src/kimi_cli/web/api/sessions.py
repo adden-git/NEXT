@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+from collections import deque
+from datetime import UTC, datetime
 from kimi_cli.web.utils._json import json
 import mimetypes
 import os
 import shutil
 import time
-from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import quote
@@ -58,6 +59,7 @@ work_dirs_router = APIRouter(prefix="/api/work-dirs", tags=["work-dirs"])
 
 # Constants
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100MB
+MAX_REPLAY_WIRE_MESSAGES = 200  # Max wire events to replay on reconnect
 DEFAULT_MAX_PUBLIC_PATH_DEPTH = 6
 SENSITIVE_PATH_PARTS = {
     "id_rsa",
@@ -190,9 +192,16 @@ def _ensure_public_file_access_allowed(
         )
 
 
-def _read_wire_lines(wire_file: Path) -> list[str]:
-    """Read and parse wire.jsonl into JSONRPC event strings (runs in thread)."""
-    result: list[str] = []
+def _read_wire_lines(wire_file: Path, max_messages: int | None = None) -> tuple[list[str], int]:
+    """Read and parse wire.jsonl into JSONRPC event strings (runs in thread).
+
+    Returns:
+        A tuple of (event_strings, total_message_count).  If ``max_messages``
+        is set, only the *last* N events are returned, but the total count
+        reflects the full file.
+    """
+    result: deque[str] = deque(maxlen=max_messages) if max_messages else deque()
+    total = 0
     with open(wire_file, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -226,19 +235,46 @@ def _read_wire_lines(wire_file: Path) -> list[str]:
                     # on the deserialized object, not at the raw dict top level.
                     event_msg["id"] = message.id
                 result.append(json.dumps(event_msg, ensure_ascii=False))
+                total += 1
             except (json.JSONDecodeError, KeyError, ValueError, TypeError):
                 continue
-    return result
+    return list(result), total
 
 
-async def replay_history(ws: WebSocket, session_dir: Path) -> None:
-    """Replay historical wire messages from wire.jsonl to a WebSocket."""
+async def replay_history(
+    ws: WebSocket, session_dir: Path, max_messages: int = MAX_REPLAY_WIRE_MESSAGES
+) -> None:
+    """Replay historical wire messages from wire.jsonl to a WebSocket.
+
+    Only the most recent ``max_messages`` events are replayed to avoid
+    overwhelming the client with huge histories.
+    """
     wire_file = session_dir / "wire.jsonl"
     if not await asyncio.to_thread(wire_file.exists):
         return
 
     try:
-        lines = await asyncio.to_thread(_read_wire_lines, wire_file)
+        lines, total = await asyncio.to_thread(
+            _read_wire_lines, wire_file, max_messages=max_messages
+        )
+        if total > len(lines):
+            # Notify the client that history was truncated
+            trunc_notice = json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "event",
+                    "params": {
+                        "type": "history_truncated",
+                        "payload": {
+                            "total_messages": total,
+                            "shown_messages": len(lines),
+                            "skipped_messages": total - len(lines),
+                        },
+                    },
+                },
+                ensure_ascii=False,
+            )
+            await ws.send_text(trunc_notice)
         for event_text in lines:
             await ws.send_text(event_text)
     except Exception:

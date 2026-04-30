@@ -138,6 +138,7 @@ import { createMessageId, getApiBaseUrl } from "./utils";
 import { kimiCliVersion } from "@/lib/version";
 import { handleToolResult, useToolEventsStore, type TodoItem } from "@/features/tool/store";
 import { v4 as uuidV4 } from "uuid";
+import { toast } from "sonner";
 
 // Regex patterns moved to top level for performance
 const DATA_URL_MEDIA_TYPE_REGEX = /^data:([^;,]+)[;,]/;
@@ -2071,6 +2072,24 @@ export function useSessionStream(
           setIsReplayingHistory(false);
           setStatus("ready");
           awaitingIdleRef.current = false;
+          return;
+        }
+
+        // Check for history_truncated marker
+        if (
+          message.method === "event" &&
+          (message.params as { type?: string })?.type === "history_truncated"
+        ) {
+          const payload = (message.params as { payload?: { total_messages?: number; shown_messages?: number; skipped_messages?: number } })?.payload;
+          const total = payload?.total_messages ?? 0;
+          const shown = payload?.shown_messages ?? 0;
+          const skipped = payload?.skipped_messages ?? 0;
+          if (skipped > 0) {
+            toast.info(
+              `История усечена: показано ${shown} из ${total} сообщений`,
+              { description: `${skipped} более ранних сообщений скрыты для скорости`, duration: 6000 }
+            );
+          }
           return;
         }
 

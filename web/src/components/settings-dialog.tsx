@@ -666,12 +666,28 @@ export function SettingsDialog() {
                           method: "POST",
                           headers: getAuthHeader(),
                         });
+                        const contentType = res.headers.get("content-type") || "";
+                        if (!res.ok) {
+                          const text = contentType.includes("application/json") ? await res.text() : await res.text();
+                          toast.error("Ошибка обновления", {
+                            description: `HTTP ${res.status}: ${text.slice(0, 200)}`,
+                          });
+                          return;
+                        }
+                        if (!contentType.includes("application/json")) {
+                          const text = await res.text();
+                          toast.error("Ошибка обновления", {
+                            description: `Сервер вернул не JSON (${contentType}): ${text.slice(0, 200)}`,
+                          });
+                          return;
+                        }
                         const data = await res.json();
                         if (data.success) {
                           setUpdateLogs(data.logs);
                           toast.success("Обновление выполнено", { description: "Сервер перезапущен" });
                         } else {
                           toast.error("Ошибка обновления", { description: data.error || "Неизвестная ошибка" });
+                          setUpdateLogs(data.logs);
                         }
                       } catch (e: any) {
                         toast.error("Ошибка обновления", { description: e.message });

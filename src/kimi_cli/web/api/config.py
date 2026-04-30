@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
+import shutil
+import subprocess
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
@@ -13,8 +17,6 @@ from kimi_cli import logger
 from kimi_cli.config import Config, LLMModel, get_config_file, load_config, save_config
 from kimi_cli.llm import ProviderType, derive_model_capabilities
 from kimi_cli.utils.subprocess_env import get_clean_env
-import subprocess
-
 from kimi_cli.web.auth_users import get_sync_status
 from kimi_cli.web.runner.process import KimiCLIRunner
 
@@ -488,16 +490,67 @@ async def get_version() -> dict[str, str]:
         return {"version": "unknown"}
 
 
+def _get_current_branch(cwd: Path) -> str:
+    """Detect the currently checked-out git branch."""
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        branch = result.stdout.strip()
+        if branch and branch != "HEAD":
+            return branch
+    except Exception:
+        pass
+    return "main"
+
+
+def _get_pm2_name() -> str | None:
+    """Try to detect the PM2 process name for the current process."""
+    try:
+        import os
+
+        my_pid = os.getpid()
+        result = subprocess.run(
+            ["pm2", "jlist"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        processes = json.loads(result.stdout)
+        for proc in processes:
+            pm2_env = proc.get("pm2_env", {})
+            pid_path = pm2_env.get("pm_pid_path", "")
+            if pid_path and str(my_pid) in pid_path:
+                return proc.get("name")
+            # fallback: compare PID from pm2_env.pid
+            if pm2_env.get("pid") == my_pid:
+                return proc.get("name")
+    except Exception:
+        pass
+    # Final fallback: env override
+    return os.environ.get("KIMI_PM2_NAME")
+
+
 @router.post("/update", summary="Update app from git and rebuild")
 async def post_update(request: Request) -> dict[str, Any]:
     """Run git pull, npm build, copy static, pm2 restart."""
+    _ensure_sensitive_apis_allowed(request)
     startup_dir = Path(request.app.state.startup_dir)
     logs: list[str] = []
 
-    def run(cmd: list[str], cwd: Path) -> str:
+    def run(cmd: list[str], cwd: Path, env: dict[str, str] | None = None) -> str:
         try:
             result = subprocess.run(
-                cmd, cwd=str(cwd), capture_output=True, text=True, timeout=300
+                cmd,
+                cwd=str(cwd),
+                capture_output=True,
+                text=True,
+                timeout=300,
+                env=env,
             )
             return (result.stdout + result.stderr).strip()
         except subprocess.TimeoutExpired:
@@ -505,39 +558,68 @@ async def post_update(request: Request) -> dict[str, Any]:
         except Exception as e:
             return f"ERROR: {e}"
 
-    logs.append("=== git pull ===")
-    pull_output = run(["git", "pull", "origin", "fresh-main"], startup_dir)
+    branch = _get_current_branch(startup_dir)
+    logs.append(f"=== git pull (branch: {branch}) ===")
+    pull_output = run(["git", "pull", "origin", branch], startup_dir)
     logs.append(pull_output)
     if "Already up to date" in pull_output:
         logs.append("Already up to date")
-    elif "error" in pull_output.lower() or "fatal" in pull_output.lower():
+        return {"success": True, "logs": logs}
+    if "error" in pull_output.lower() or "fatal" in pull_output.lower():
         logs.append("Git pull failed, aborting")
-        return {"success": False, "logs": logs}
+        return {"success": False, "logs": logs, "error": "Git pull failed"}
 
     logs.append("=== npm build ===")
     web_dir = startup_dir / "web"
     env = os.environ.copy()
     env["VITE_DISABLE_TYPESCRIPT"] = "1"
-    logs.append(run(["npx", "vite", "build"], web_dir))
+    build_output = run(["npx", "vite", "build"], web_dir, env=env)
+    logs.append(build_output)
+    if "error" in build_output.lower() or "ERR_" in build_output:
+        logs.append("Build failed, aborting")
+        return {"success": False, "logs": logs, "error": "Build failed"}
 
     logs.append("=== copy static ===")
     dist_dir = web_dir / "dist"
     static_dir = startup_dir / "src" / "kimi_cli" / "web" / "static"
     if dist_dir.exists() and static_dir.exists():
-        for item in dist_dir.iterdir():
-            dest = static_dir / item.name
-            if item.is_dir():
-                import shutil
-                if dest.exists():
-                    shutil.rmtree(dest)
-                shutil.copytree(item, dest)
-            else:
-                shutil.copy2(item, dest)
-        logs.append("OK")
+        try:
+            for item in dist_dir.iterdir():
+                dest = static_dir / item.name
+                if item.is_dir():
+                    if dest.exists():
+                        shutil.rmtree(dest)
+                    shutil.copytree(item, dest)
+                else:
+                    shutil.copy2(item, dest)
+            logs.append("OK")
+        except Exception as e:
+            logs.append(f"Copy failed: {e}")
+            return {"success": False, "logs": logs, "error": f"Copy failed: {e}"}
     else:
         logs.append("MISSING dirs")
 
     logs.append("=== pm2 restart ===")
-    logs.append(run(["pm2", "restart", "kimi-dev-5500"], startup_dir))
+    pm2_name = _get_pm2_name()
+    if pm2_name:
+        # Schedule restart after a short delay so the HTTP response can be
+        # fully sent before the process is killed.
+        import threading
+
+        def _delayed_restart() -> None:
+            import time
+
+            time.sleep(2)
+            subprocess.run(
+                ["pm2", "restart", pm2_name],
+                cwd=str(startup_dir),
+                capture_output=True,
+                text=True,
+            )
+
+        threading.Thread(target=_delayed_restart, daemon=True).start()
+        logs.append(f"PM2 restart of '{pm2_name}' scheduled in 2s")
+    else:
+        logs.append("PM2 name not detected, skipping restart")
 
     return {"success": True, "logs": logs}
