@@ -46,6 +46,13 @@ type ExtendedConfig = {
     matcher?: string;
     timeout?: number;
   }>;
+  models: Record<string, {
+    provider: string;
+    model: string;
+    max_context_size: number;
+    capabilities: string[];
+    display_name: string;
+  }>;
 };
 
 type ModelEnvVars = {
