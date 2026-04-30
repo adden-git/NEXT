@@ -1,8 +1,67 @@
 # kimi-next — изменения, доработки и оптимизации
 
 > **Проект:** `/var/www/kimi-next/` (Kimi Code CLI Web UI, порт 5500)
-> **Дата обновления:** 2026-04-29 (настройки + UI + мобильная адаптация)
+> **Дата обновления:** 2026-04-30 (settings fix + history pagination + models validation fix)
 > **Статус:** активная разработка + оптимизация
+
+---
+
+## 🆕 Последние изменения (2026-04-30)
+
+### 1. Исправление сохранения настроек (критический фикс)
+
+**Проблема:** настройки сессии и глобальные настройки не сохранялись из-за stale closure в React.
+
+**Исправления:**
+
+| Компонент | Файл | Что исправлено |
+|-----------|------|----------------|
+| Session Settings | `web/src/components/session-settings-dialog.tsx` | Добавлен `paramsRef` — auto-save теперь читает актуальные значения |
+| Session Settings | `web/src/components/session-settings-dialog.tsx` | Force save при закрытии диалога (до срабатывания debounce 1200ms) |
+| Session Settings | `web/src/components/session-settings-dialog.tsx` | `thinking_keep` — убрана осцилляция `""` ↔ `null` (теперь `??`) |
+| Global Settings | `web/src/components/settings-dialog.tsx` | Добавлены `cfgRef` + `envRef` — сохранение из актуального состояния |
+| Global Settings | `web/src/components/settings-dialog.tsx` | Force save при закрытии диалога |
+| Global Settings | `web/src/components/settings-dialog.tsx` | Все `setCfg` вызовы обновляют `cfgRef.current` |
+
+**Результат:** все параметры (temperature, top_p, max_tokens, thinking_keep, loop_control, providers и др.) теперь **корректно сохраняются и восстанавливаются**.
+
+### 2. Пагинация истории сообщений
+
+**Файлы:**
+- `src/kimi_cli/web/api/sessions.py` — новый endpoint `GET /api/sessions/{session_id}/history?offset=&limit=`
+- `web/src/hooks/useSessionStream.ts` — `loadOlderMessages()`, `isLoadingOlder`, `totalMessageCount`
+- `web/src/features/chat/chat-workspace-container.tsx` — прокинуты pagination props
+- `web/src/features/chat/components/virtualized-message-list.tsx` — кнопка «Загрузить предыдущие»
+
+**Endpoint:**
+```
+GET /api/sessions/{session_id}/history?offset=0&limit=200
+→ { "events": [...], "total": 7485, "offset": 0, "limit": 200 }
+```
+
+**UI:**
+- Кнопка «Загрузить предыдущие (N скрыто)» над списком сообщений
+- При truncation показывается toast: «История усечена: показано X из Y сообщений»
+
+### 3. Исправление валидации global config (models field)
+
+**Проблема:** `PUT /api/config/extended` возвращал `Default model X not found in models`.
+
+**Причина:** в `ExtendedConfig` типе на фронтенде отсутствовало поле `models`. При сохранении отправлялся пустой словарь `{}`, а бэкенд валидатор `Config.model_validate()` требовал наличия `default_model` в ключах `models`.
+
+**Исправление:** `web/src/components/settings-dialog.tsx` — добавлено поле `models` в `ExtendedConfig` тип.
+
+**Результат:** глобальные настройки (loop_control, providers, services, mcp, hooks) теперь сохраняются без ошибок.
+
+### 4. Инфраструктура и порты (исправлено)
+
+| URL / Порт | Приложение | Как запускается |
+|------------|------------|-----------------|
+| `https://api.alpsstroy.ru/` → `127.0.0.1:5494` | **Старый Kimi** (оригинальный CLI Web UI) | `systemctl start kimi-web.service` |
+| `http://94.241.142.95:5500` | **Kimi Next** (новый Web UI) | `pm2 start kimi-dev-5500` |
+| `127.0.0.1:5496` | **Settings Panel** | `pm2 start kimi-settings` |
+
+> **Важно:** nginx для `api.alpsstroy.ru` проксирует на **5494** (старый Kimi), а не на 5500. Kimi Next доступен напрямую по IP:5500.
 
 ---
 
@@ -214,10 +273,13 @@
 ## 🚀 Инфраструктура
 
 - **Dev сервер:** `kimi-dev-5500` (PM2), порт 5500
-- **Билд frontend:** `cd /var/www/kimi-next/web && npm run build` (~2.5 мин)
+- **Старый Kimi:** `kimi-web.service` (systemd), порт 5494
+- **Settings Panel:** `kimi-settings` (PM2), порт 5496
+- **Билд frontend:** `cd /var/www/kimi-next/web && npm run build` (~2.5–4 мин)
 - **Синхронизация статики:** `cp -r web/dist/* src/kimi_cli/web/static/`
-- **Перезапуск:** `pm2 restart kimi-dev-5500`
-- **Nginx:** `api.alpsstroy.ru:443` → порт 5494 (старый бинарник, не трогали)
+- **Перезапуск Kimi Next:** `pm2 restart kimi-dev-5500`
+- **Перезапуск старого Kimi:** `systemctl restart kimi-web.service`
+- **Nginx:** `api.alpsstroy.ru:443` → `127.0.0.1:5494` (старый Kimi)
 
 ---
 
@@ -229,31 +291,36 @@
 
 ---
 
-## ✅ Тесты настроек — проверка работоспособности
+## ✅ Тесты настроек — проверка работоспособности (2026-04-30)
 
-### 1. Backend API env vars
+### 1. Сессионные настройки
 | Тест | Запрос | Результат |
 |------|--------|-----------|
-| GET env (без токена) | `GET /api/config/env` | 401 Unauthorized ✅ |
-| GET env (с токеном) | `GET /api/config/env?token=...` | `{"temperature":null,...}` ✅ |
-| PUT temperature=0.7 | `PUT /api/config/env` + Bearer | 200 OK, env установлен ✅ |
-| PUT temperature=3.0 (out of range) | `PUT /api/config/env` + Bearer | 422 Validation Error ✅ |
-| PUT max_tokens=300000 (out of range) | `PUT /api/config/env` + Bearer | 422 Validation Error ✅ |
+| GET model-params | `GET /api/sessions/{sid}/model-params` | `{"temperature":0.3,...}` ✅ |
+| PUT temperature=0.3 | `PUT /api/sessions/{sid}/model-params` | 200 OK ✅ |
+| PUT max_tokens=64000 | `PUT /api/sessions/{sid}/model-params` | 200 OK ✅ |
+| PUT thinking_keep=high | `PUT /api/sessions/{sid}/model-params` | 200 OK ✅ |
+| GET повторно | `GET /api/sessions/{sid}/model-params` | Значения сохранены ✅ |
 
-### 2. Env vars в процессе
-```bash
-$ curl -s "http://localhost:5500/api/config/env?token=..."
-{"temperature":"0.7","top_p":"0.9","max_tokens":"8192","thinking_keep":null}
-```
-- Значения реально записываются в `os.environ` ✅
-- Workers перезапускаются автоматически после PUT ✅
+### 2. Глобальные ENV настройки
+| Тест | Запрос | Результат |
+|------|--------|-----------|
+| PUT temperature=0.7 | `PUT /api/config/env` | 200 OK ✅ |
+| PUT max_tokens=32768 | `PUT /api/config/env` | 200 OK ✅ |
+| GET повторно | `GET /api/config/env` | Значения сохранены ✅ |
 
-### 3. Влияние на LLM генерацию
-- `KIMI_MODEL_TEMPERATURE` — читается в `src/kimi_cli/llm.py` строка 147 ✅
-- `KIMI_MODEL_TOP_P` — читается в `src/kimi_cli/llm.py` строка 149 ✅
-- `KIMI_MODEL_MAX_TOKENS` — читается в `src/kimi_cli/llm.py` строка 151 ✅
-- `KIMI_MODEL_THINKING_KEEP` — читается в `src/kimi_cli/llm.py` строка 259 ✅
-- При restart workers новые env vars наследуются через `get_clean_env()` ✅
+### 3. Глобальный конфиг (extended)
+| Тест | Запрос | Результат |
+|------|--------|-----------|
+| PUT max_steps_per_turn=40 | `PUT /api/config/extended` | 200 OK ✅ |
+| PUT compaction_trigger_ratio=0.70 | `PUT /api/config/extended` | 200 OK ✅ |
+| GET повторно | `GET /api/config/extended` | Значения сохранены ✅ |
+
+### 4. Версия и обновление
+| Тест | Запрос | Результат |
+|------|--------|-----------|
+| GET версия | `GET /api/config/version` | `{"version":"1.41.0"}` ✅ |
+| POST обновление | `POST /api/config/update` | git pull ✅ |
 
 ---
 
@@ -266,7 +333,7 @@ $ curl -s "http://localhost:5500/api/config/env?token=..."
 1. **Хардкод ветки `fresh-main`** — на GitHub default-ветка `main`, у друга после clone будет `main`.
 2. **Хардкод PM2-имени `kimi-dev-5500`** — друг может назвать процесс иначе.
 3. **Не передавался `env` в subprocess** — `VITE_DISABLE_TYPESCRIPT=1` не применялся.
-4. **`shutil` без `try/except`** — ошибка прав доступом → необработанное исключение → HTML 500.
+4. **`shutil` без `try/except`** — ошибка прав доступа → необработанное исключение → HTML 500.
 5. **PM2-рестарт мгновенный** — процесс убивал себя до завершения HTTP-ответа.
 6. **Фронтенд не проверял `content-type`** — при HTML-ответе крашился парсер JSON.
 
@@ -318,6 +385,8 @@ git clone https://TOKEN@github.com/adden-git/kimi-next.git
 
 **Файл:** `/etc/nginx/sites-enabled/api.alpsstroy.ru`
 - `client_max_body_size` увеличен с `50M` до `100M` (соответствует `MAX_UPLOAD_SIZE` в backend).
+- `proxy_pass` для `api.alpsstroy.ru` указывает на `127.0.0.1:5494` (старый Kimi).
+- Kimi Next доступен напрямую по `http://94.241.142.95:5500`.
 
 ---
 
@@ -336,5 +405,3 @@ git clone https://TOKEN@github.com/adden-git/kimi-next.git
 ---
 
 ## 🏆 Специально для Фила
-
-Фил — ты майонезный шлепок. Нихуя не понимаешь в архитектуре, в оптимизации, и вообще в жизни. Пока ты предлагаешь переписать всё на Go/Rust "потому что быстрее", мы уже сделали реальный прирост производительности за пару часов, не сломав ни одной фичи. Иди учи матчасть, а потом возвращайся со своими "гениальными" идеями. 🖕
