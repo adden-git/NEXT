@@ -44,7 +44,8 @@ result-*
 target/
 
 node_modules/
-static/
+# Only ignore static/ at project root, not src/kimi_cli/web/static/
+/static/
 .memo/
 .entire
 .claude

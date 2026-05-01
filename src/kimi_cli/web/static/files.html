@@ -182,6 +182,14 @@
 </style>
 </head>
 <body>
+<script>
+  (function() {
+    var stored = localStorage.getItem('kimi-theme');
+    var map = { dark: 'kimi-dark', light: 'kimi-light' };
+    var theme = map[stored] || stored || 'kimi-dark';
+    document.documentElement.setAttribute('data-theme', theme);
+  })();
+</script>
 <div class="header">
   <div class="header-left">
     <a href="/" class="logo-link" onclick="goBack(event)" title="Назад в Kimi Next">

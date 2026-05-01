@@ -32,6 +32,27 @@ type InstructionsData = {
   files: InstructionFile[];
 };
 
+type GitFileDiff = {
+  path: string;
+  additions: number;
+  deletions: number;
+  status: string;
+};
+
+type GitDiffStats = {
+  is_git_repo: boolean;
+  has_changes: boolean;
+  total_additions: number;
+  total_deletions: number;
+  files: GitFileDiff[] | null;
+  error: string | null;
+};
+
+type GuardianSettings = {
+  enabled: boolean;
+  model: string | null;
+};
+
 const DEFAULT_PARAMS = {
   temperature: 1.0,
   top_p: 0.95,
@@ -606,7 +627,13 @@ export function SessionSettingsDialog({ sessionId }: { sessionId: string }) {
   const [instructionsLoading, setInstructionsLoading] = useState(false);
   const [refactoring, setRefactoring] = useState(false);
   const [refactorResult, setRefactorResult] = useState<any>(null);
+  const [gitDiff, setGitDiff] = useState<GitDiffStats | null>(null);
+  const [guardian, setGuardian] = useState<GuardianSettings>({ enabled: false, model: null });
+  const [guardianLoading, setGuardianLoading] = useState(false);
+  const [guardianDirty, setGuardianDirty] = useState(false);
+  const [configModels, setConfigModels] = useState<Record<string, { provider: string; model: string; display_name?: string }>>({});
   const saveTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const guardianSaveTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const paramsRef = useRef<SessionModelParams>({ ...DEFAULT_PARAMS });
 
   const loadParams = useCallback(async () => {
@@ -657,13 +684,73 @@ export function SessionSettingsDialog({ sessionId }: { sessionId: string }) {
     }
   }, [sessionId]);
 
+  const loadGitDiff = useCallback(async () => {
+    if (!sessionId || sessionId === "undefined") return;
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/git-diff`, {
+        headers: getAuthHeader(),
+      });
+      if (res.ok) {
+        setGitDiff(await res.json());
+      }
+    } catch (e: any) {
+      // Silently fail — git diff is non-critical
+    }
+  }, [sessionId]);
+
+  const loadGuardian = useCallback(async () => {
+    if (!sessionId || sessionId === "undefined") return;
+    setGuardianLoading(true);
+    try {
+      const [gRes, mRes] = await Promise.all([
+        fetch(`/api/sessions/${sessionId}/guardian`, { headers: getAuthHeader() }),
+        fetch("/api/config/models", { headers: getAuthHeader() }),
+      ]);
+      if (!gRes.ok) throw new Error(`HTTP ${gRes.status}`);
+      const gData = await gRes.json();
+      setGuardian({ enabled: !!gData.enabled, model: gData.model || null });
+      setGuardianDirty(false);
+      if (mRes.ok) {
+        const mData = await mRes.json();
+        setConfigModels(mData.models || {});
+      }
+    } catch (e: any) {
+      toast.error("Не удалось загрузить настройки Guardian AI", { description: e.message });
+    } finally {
+      setGuardianLoading(false);
+    }
+  }, [sessionId]);
+
+  const saveGuardian = useCallback(async (settings: GuardianSettings) => {
+    try {
+      const res = await fetch(`/api/sessions/${sessionId}/guardian`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json", ...getAuthHeader() },
+        body: JSON.stringify({ enabled: settings.enabled, model: settings.model }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success("Guardian AI сохранён", {
+          description: settings.enabled ? "Двойная проверка включена" : "Двойная проверка отключена",
+        });
+        setGuardianDirty(false);
+      } else {
+        toast.error("Ошибка сохранения Guardian AI", { description: data.error || "Неизвестная ошибка" });
+      }
+    } catch (e: any) {
+      toast.error("Ошибка сохранения Guardian AI", { description: e.message });
+    }
+  }, [sessionId]);
+
   useEffect(() => {
     if (open) {
       loadParams();
       loadInstructions();
+      loadGitDiff();
+      loadGuardian();
       setRefactorResult(null);
     }
-  }, [open, loadParams, loadInstructions]);
+  }, [open, loadParams, loadInstructions, loadGitDiff, loadGuardian]);
 
   const doSave = useCallback(async (current: SessionModelParams) => {
     setSaving(true);
@@ -706,6 +793,7 @@ export function SessionSettingsDialog({ sessionId }: { sessionId: string }) {
   useEffect(() => {
     return () => {
       if (saveTimeout.current) clearTimeout(saveTimeout.current);
+      if (guardianSaveTimeout.current) clearTimeout(guardianSaveTimeout.current);
     };
   }, []);
 
@@ -738,11 +826,18 @@ export function SessionSettingsDialog({ sessionId }: { sessionId: string }) {
 
   return (
     <Dialog open={open} onOpenChange={(newOpen) => {
-      if (!newOpen && dirty && saveTimeout.current) {
+      if (!newOpen) {
         // Force save immediately when closing dialog with pending changes
-        clearTimeout(saveTimeout.current);
-        saveTimeout.current = null;
-        doSave(paramsRef.current);
+        if (dirty && saveTimeout.current) {
+          clearTimeout(saveTimeout.current);
+          saveTimeout.current = null;
+          doSave(paramsRef.current);
+        }
+        if (guardianDirty && guardianSaveTimeout.current) {
+          clearTimeout(guardianSaveTimeout.current);
+          guardianSaveTimeout.current = null;
+          saveGuardian(guardian);
+        }
       }
       setOpen(newOpen);
     }}>
@@ -782,6 +877,125 @@ export function SessionSettingsDialog({ sessionId }: { sessionId: string }) {
 
             <Separator />
 
+            {/* Guardian AI */}
+            <section>
+              <h3 className="text-sm font-medium text-muted-foreground mb-3 flex items-center gap-2">
+                <span>🛡️</span> Guardian AI (двойная проверка)
+              </h3>
+              {guardianLoading ? (
+                <div className="text-muted-foreground text-sm">Загрузка...</div>
+              ) : (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-0.5">
+                      <label className="text-sm font-medium">Включить двойную проверку</label>
+                      <p className="text-[10px] text-muted-foreground">
+                        Перед выполнением каждого инструмента второй LLM проверяет безопасность вызова
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => {
+                        const next = { ...guardian, enabled: !guardian.enabled };
+                        setGuardian(next);
+                        setGuardianDirty(true);
+                        saveGuardian(next);
+                      }}
+                      className={`
+                        relative inline-flex h-6 w-11 items-center rounded-full transition-colors
+                        ${guardian.enabled ? "bg-primary" : "bg-muted"}
+                      `}
+                      aria-label={guardian.enabled ? "Отключить Guardian AI" : "Включить Guardian AI"}
+                    >
+                      <span
+                        className={`
+                          inline-block h-4 w-4 transform rounded-full bg-white transition-transform
+                          ${guardian.enabled ? "translate-x-6" : "translate-x-1"}
+                        `}
+                      />
+                    </button>
+                  </div>
+
+                  {guardian.enabled && (
+                    <div className="space-y-3">
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium">Модель для проверки</label>
+                        {Object.keys(configModels).length > 0 ? (
+                          <select
+                            value={guardian.model || ""}
+                            onChange={(e) => {
+                              const val = e.target.value || null;
+                              const next = { ...guardian, model: val };
+                              setGuardian(next);
+                              setGuardianDirty(true);
+                              if (guardianSaveTimeout.current) clearTimeout(guardianSaveTimeout.current);
+                              guardianSaveTimeout.current = setTimeout(() => saveGuardian(next), 800);
+                            }}
+                            className="h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                          >
+                            <option value="">— Основная модель сессии —</option>
+                            {Object.entries(configModels).map(([name, m]) => (
+                              <option key={name} value={name}>
+                                {name} ({m.provider}) {m.display_name ? `— ${m.display_name}` : ""}
+                              </option>
+                            ))}
+                          </select>
+                        ) : (
+                          <Input
+                            value={guardian.model || ""}
+                            onChange={(e) => {
+                              const next = { ...guardian, model: e.target.value || null };
+                              setGuardian(next);
+                              setGuardianDirty(true);
+                              if (guardianSaveTimeout.current) clearTimeout(guardianSaveTimeout.current);
+                              guardianSaveTimeout.current = setTimeout(() => saveGuardian(next), 1200);
+                            }}
+                            placeholder="provider/model или оставьте пустым для основной модели"
+                            className="w-full"
+                          />
+                        )}
+                        <p className="text-[10px] text-muted-foreground">
+                          Оставьте пустым чтобы использовать ту же модель что и основной чат.
+                          Настраивается в <a href="#" onClick={(e) => { e.preventDefault(); window.dispatchEvent(new CustomEvent("open-settings")); }} className="text-primary underline">глобальных настройках</a>.
+                        </p>
+                      </div>
+
+                      {/* Preset recommendations */}
+                      <div className="rounded-md border bg-muted/20 p-3 space-y-2">
+                        <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Рекомендуемые модели для Guardian</p>
+                        <div className="space-y-1.5">
+                          {[
+                            { name: "Llama 3.2 3B (Fireworks)", price: "$0.10 / 1M токенов", desc: "Самая дешевая, ~$0.00007 за проверку", color: "text-green-600 dark:text-green-400" },
+                            { name: "Llama 3.1 8B (Fireworks)", price: "$0.20 / 1M токенов", desc: "Лучший баланс, ~$0.00014 за проверку", color: "text-blue-600 dark:text-blue-400" },
+                            { name: "Qwen2.5 7B (Fireworks)", price: "$0.20 / 1M токенов", desc: "Хорошая точность, ~$0.00014 за проверку", color: "text-amber-600 dark:text-amber-400" },
+                            { name: "DeepSeek V3 (Fireworks)", price: "$0.56 / 1M токенов", desc: "Высокая точность, ~$0.00040 за проверку", color: "text-purple-600 dark:text-purple-400" },
+                          ].map((preset) => (
+                            <div key={preset.name} className="flex items-center justify-between text-xs">
+                              <div>
+                                <span className="font-medium">{preset.name}</span>
+                                <span className={`ml-1.5 ${preset.color}`}>{preset.price}</span>
+                              </div>
+                              <span className="text-[10px] text-muted-foreground">{preset.desc}</span>
+                            </div>
+                          ))}
+                        </div>
+                        <p className="text-[10px] text-muted-foreground">
+                          Добавьте Fireworks в <a href="#" onClick={(e) => { e.preventDefault(); window.dispatchEvent(new CustomEvent("open-settings")); }} className="text-primary underline">глобальных настройках</a> (кнопка + Fireworks), затем выберите модель из списка выше.
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {guardianDirty && (
+                    <span className="text-[10px] text-amber-600 dark:text-amber-400">
+                      сохранение...
+                    </span>
+                  )}
+                </div>
+              )}
+            </section>
+
+            <Separator />
+
             <InstructionsSection
               data={instructionsLoading ? null : instructions}
               sessionId={sessionId}
@@ -791,6 +1005,67 @@ export function SessionSettingsDialog({ sessionId }: { sessionId: string }) {
             />
 
             {refactorResult && <RefactorResult result={refactorResult} />}
+
+            <Separator />
+
+            {/* Git Diff */}
+            <section>
+              <h3 className="text-sm font-medium text-muted-foreground mb-3 flex items-center gap-2">
+                <span>📊</span> Git diff
+              </h3>
+              {gitDiff === null ? (
+                <div className="text-muted-foreground text-sm">Загрузка...</div>
+              ) : !gitDiff.is_git_repo ? (
+                <div className="text-muted-foreground text-sm">Директория не является git-репозиторием</div>
+              ) : gitDiff.error ? (
+                <div className="text-red-500 text-sm">Ошибка: {gitDiff.error}</div>
+              ) : !gitDiff.has_changes ? (
+                <div className="text-muted-foreground text-sm">Нет изменений — рабочая директория чистая</div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-4 text-sm">
+                    <span className="text-green-600 dark:text-green-400 font-mono">+{gitDiff.total_additions}</span>
+                    <span className="text-red-600 dark:text-red-400 font-mono">-{gitDiff.total_deletions}</span>
+                    <span className="text-muted-foreground text-xs">{gitDiff.files?.length || 0} файлов</span>
+                  </div>
+                  <div className="max-h-48 overflow-y-auto border rounded-md bg-muted/10">
+                    <table className="w-full text-xs">
+                      <thead className="bg-muted/40 sticky top-0">
+                        <tr>
+                          <th className="text-left px-3 py-1.5 font-medium text-muted-foreground">Файл</th>
+                          <th className="text-right px-3 py-1.5 font-medium text-green-600 dark:text-green-400">+</th>
+                          <th className="text-right px-3 py-1.5 font-medium text-red-600 dark:text-red-400">−</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {gitDiff.files?.map((f) => (
+                          <tr key={f.path} className="border-t">
+                            <td className="px-3 py-1.5 truncate max-w-[300px]" title={f.path}>
+                              <span className={
+                                f.status === "added" && f.additions === 0 && f.deletions === 0
+                                  ? "text-yellow-600 dark:text-yellow-400"
+                                  : ""
+                              }>
+                                {f.path}
+                              </span>
+                              {f.status === "added" && f.additions === 0 && f.deletions === 0 && (
+                                <span className="text-muted-foreground ml-1">(untracked)</span>
+                              )}
+                            </td>
+                            <td className="text-right px-3 py-1.5 font-mono text-green-600 dark:text-green-400">
+                              {f.additions > 0 ? `+${f.additions}` : ""}
+                            </td>
+                            <td className="text-right px-3 py-1.5 font-mono text-red-600 dark:text-red-400">
+                              {f.deletions > 0 ? `-${f.deletions}` : ""}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </section>
           </div>
         </div>
       </DialogContent>

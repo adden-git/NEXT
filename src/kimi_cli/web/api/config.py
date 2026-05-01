@@ -232,6 +232,26 @@ async def get_extended_config(http_request: Request) -> ExtendedConfig:
     return ExtendedConfig(config=config.model_dump(mode="json"))
 
 
+@router.get("/models", summary="Get available LLM models from config")
+async def get_config_models(http_request: Request) -> dict[str, Any]:
+    """Get the models registry from the global config."""
+    _ensure_sensitive_apis_allowed(http_request)
+    config = load_config()
+    return {
+        "models": {
+            name: {
+                "provider": m.provider,
+                "model": m.model,
+                "max_context_size": m.max_context_size,
+                "capabilities": list(m.capabilities) if m.capabilities else [],
+                "display_name": m.display_name,
+            }
+            for name, m in config.models.items()
+        },
+        "providers": list(config.providers.keys()),
+    }
+
+
 class UpdateExtendedConfigRequest(BaseModel):
     """Request to update full config from JSON."""
 
@@ -356,109 +376,6 @@ async def update_extended_config(
     except Exception as e:
         logger.warning(f"Failed to update extended config: {e}")
         return UpdateExtendedConfigResponse(success=False, error=str(e))
-
-
-class GitFileDiff(BaseModel):
-    """Single file diff entry."""
-
-    path: str
-    additions: int
-    deletions: int
-    status: str
-
-
-class GitDiffStats(BaseModel):
-    """Git diff statistics."""
-
-    is_git_repo: bool = True
-    has_changes: bool = False
-    total_additions: int = 0
-    total_deletions: int = 0
-    files: list[GitFileDiff] | None = None
-    error: str | None = None
-
-
-@router.get("/git-diff", summary="Get git diff for startup directory")
-async def get_startup_git_diff(request: Request) -> GitDiffStats:
-    """Get git diff stats for the startup directory."""
-    work_dir = Path(request.app.state.startup_dir)
-
-    if not (work_dir / ".git").exists():
-        return GitDiffStats(is_git_repo=False)
-
-    try:
-        files: list[GitFileDiff] = []
-        total_add, total_del = 0, 0
-
-        check_proc = await asyncio.create_subprocess_exec(
-            "git", "rev-parse", "--verify", "HEAD",
-            cwd=str(work_dir),
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
-            env=get_clean_env(),
-        )
-        await check_proc.wait()
-        has_head = check_proc.returncode == 0
-
-        if has_head:
-            proc = await asyncio.create_subprocess_exec(
-                "git", "diff", "--numstat", "HEAD",
-                cwd=str(work_dir),
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                env=get_clean_env(),
-            )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
-
-            for line in stdout.decode().strip().split("\n"):
-                if not line:
-                    continue
-                parts = line.split("\t")
-                if len(parts) >= 3:
-                    add = int(parts[0]) if parts[0] != "-" else 0
-                    dele = int(parts[1]) if parts[1] != "-" else 0
-                    total_add += add
-                    total_del += dele
-                    file_status = "modified"
-                    if dele == 0 and add > 0:
-                        file_status = "added"
-                    elif add == 0 and dele > 0:
-                        file_status = "deleted"
-                    files.append(GitFileDiff(path=parts[2], additions=add, deletions=dele, status=file_status))
-
-        untracked_proc = await asyncio.create_subprocess_exec(
-            "git", "ls-files", "--others", "--exclude-standard",
-            cwd=str(work_dir),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL,
-            env=get_clean_env(),
-        )
-        untracked_stdout, _ = await asyncio.wait_for(untracked_proc.communicate(), timeout=5.0)
-
-        for line in untracked_stdout.decode().strip().split("\n"):
-            if line:
-                files.append(GitFileDiff(path=line, additions=0, deletions=0, status="added"))
-
-        if not has_head:
-            return GitDiffStats(
-                is_git_repo=True,
-                has_changes=len(files) > 0,
-                total_additions=0,
-                total_deletions=0,
-                files=files,
-            )
-
-        return GitDiffStats(
-            is_git_repo=True,
-            has_changes=len(files) > 0,
-            total_additions=total_add,
-            total_deletions=total_del,
-            files=files,
-        )
-    except TimeoutError:
-        return GitDiffStats(is_git_repo=True, error="Git command timed out")
-    except Exception as e:
-        return GitDiffStats(is_git_repo=True, error=str(e))
 
 
 @router.get("/license", summary="Get session sync status")

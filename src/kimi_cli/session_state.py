@@ -53,6 +53,9 @@ class SessionState(BaseModel):
     todos: list[TodoItemState] = Field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
     # Per-session model parameters (override global env)
     model_params: ModelParams | None = Field(default=None)
+    # Guardian AI dual-check settings
+    guardian_enabled: bool = Field(default=False)
+    guardian_model: str | None = Field(default=None)
 
 
 _LEGACY_METADATA_FILENAME = "metadata.json"

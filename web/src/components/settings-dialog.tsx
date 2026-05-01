@@ -15,6 +15,7 @@ type ExtendedConfig = {
   default_thinking: boolean;
   default_yolo: boolean;
   default_plan_mode: boolean;
+  theme: string;
   show_thinking_stream: boolean;
   merge_all_available_skills: boolean;
   loop_control: {
@@ -60,22 +61,6 @@ type ModelEnvVars = {
   top_p: number;
   max_tokens: number;
   thinking_keep: string;
-};
-
-type GitFileDiff = {
-  path: string;
-  additions: number;
-  deletions: number;
-  status: string;
-};
-
-type GitDiffStats = {
-  is_git_repo: boolean;
-  has_changes: boolean;
-  total_additions: number;
-  total_deletions: number;
-  files: GitFileDiff[] | null;
-  error: string | null;
 };
 
 function MaxTokensInput({ value, onChange }: { value: number; onChange: (num: number) => void }) {
@@ -131,7 +116,6 @@ export function SettingsDialog() {
   const [open, setOpen] = useState(false);
   const [cfg, setCfg] = useState<ExtendedConfig | null>(null);
   const [env, setEnv] = useState<ModelEnvVars>({ ...DEFAULT_ENV });
-  const [gitDiff, setGitDiff] = useState<GitDiffStats | null>(null);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [version, setVersion] = useState<string>("");
@@ -143,6 +127,13 @@ export function SettingsDialog() {
   const cfgRef = useRef<ExtendedConfig | null>(null);
   const envRef = useRef<ModelEnvVars>({ ...DEFAULT_ENV });
 
+  // Listen for global "open-settings" event from Session Settings links
+  useEffect(() => {
+    const handler = () => setOpen(true);
+    window.addEventListener("open-settings", handler);
+    return () => window.removeEventListener("open-settings", handler);
+  }, []);
+
   const load = useCallback(async () => {
     try {
       const [cfgRes, envRes] = await Promise.all([
@@ -153,11 +144,6 @@ export function SettingsDialog() {
       if (!envRes.ok) throw new Error(`Env HTTP ${envRes.status}`);
       const cfgData = await cfgRes.json();
       const envData = await envRes.json();
-      // Load git diff in parallel
-      const diffRes = await fetch(`${API_BASE}/git-diff`, { headers: getAuthHeader() });
-      if (diffRes.ok) {
-        setGitDiff(await diffRes.json());
-      }
       const verRes = await fetch(`${API_BASE}/version`, { headers: getAuthHeader() });
       if (verRes.ok) {
         const verData = await verRes.json();
@@ -450,8 +436,24 @@ export function SettingsDialog() {
                     <Switch id="default_yolo" checked={cfg.default_yolo} onCheckedChange={(v) => updateField("default_yolo", v)} />
                   </div>
                   <div className="flex items-center justify-between">
+                    <label htmlFor="default_plan_mode" className="text-sm font-medium">Plan mode по умолчанию</label>
+                    <Switch id="default_plan_mode" checked={cfg.default_plan_mode} onCheckedChange={(v) => updateField("default_plan_mode", v)} />
+                  </div>
+                  <div className="flex items-center justify-between">
                     <label htmlFor="show_thinking_stream" className="text-sm font-medium">Показывать поток размышлений</label>
                     <Switch id="show_thinking_stream" checked={cfg.show_thinking_stream} onCheckedChange={(v) => updateField("show_thinking_stream", v)} />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <label htmlFor="theme" className="text-sm font-medium">Тема терминала</label>
+                    <select
+                      id="theme"
+                      value={cfg.theme || "dark"}
+                      onChange={(e) => updateField("theme", e.target.value)}
+                      className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    >
+                      <option value="dark">Тёмная</option>
+                      <option value="light">Светлая</option>
+                    </select>
                   </div>
                   <div className="flex items-center justify-between">
                     <label htmlFor="merge_all_available_skills" className="text-sm font-medium">Объединять все навыки</label>
@@ -593,67 +595,6 @@ export function SettingsDialog() {
                     return next;
                   })} />
                 </div>
-              </section>
-
-              <Separator />
-
-              {/* Git Diff */}
-              <section>
-                <h3 className="text-sm font-medium text-muted-foreground mb-3 flex items-center gap-2">
-                  <span>📊</span> Git diff
-                </h3>
-                {gitDiff === null ? (
-                  <div className="text-muted-foreground text-sm">Загрузка...</div>
-                ) : !gitDiff.is_git_repo ? (
-                  <div className="text-muted-foreground text-sm">Директория не является git-репозиторием</div>
-                ) : gitDiff.error ? (
-                  <div className="text-red-500 text-sm">Ошибка: {gitDiff.error}</div>
-                ) : !gitDiff.has_changes ? (
-                  <div className="text-muted-foreground text-sm">Нет изменений — рабочая директория чистая</div>
-                ) : (
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-4 text-sm">
-                      <span className="text-green-600 dark:text-green-400 font-mono">+{gitDiff.total_additions}</span>
-                      <span className="text-red-600 dark:text-red-400 font-mono">-{gitDiff.total_deletions}</span>
-                      <span className="text-muted-foreground text-xs">{gitDiff.files?.length || 0} файлов</span>
-                    </div>
-                    <div className="max-h-48 overflow-y-auto border rounded-md bg-muted/10">
-                      <table className="w-full text-xs">
-                        <thead className="bg-muted/40 sticky top-0">
-                          <tr>
-                            <th className="text-left px-3 py-1.5 font-medium text-muted-foreground">Файл</th>
-                            <th className="text-right px-3 py-1.5 font-medium text-green-600 dark:text-green-400">+</th>
-                            <th className="text-right px-3 py-1.5 font-medium text-red-600 dark:text-red-400">−</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {gitDiff.files?.map((f) => (
-                            <tr key={f.path} className="border-t">
-                              <td className="px-3 py-1.5 truncate max-w-[300px]" title={f.path}>
-                                <span className={
-                                  f.status === "added" && f.additions === 0 && f.deletions === 0
-                                    ? "text-yellow-600 dark:text-yellow-400"
-                                    : ""
-                                }>
-                                  {f.path}
-                                </span>
-                                {f.status === "added" && f.additions === 0 && f.deletions === 0 && (
-                                  <span className="text-muted-foreground ml-1">(untracked)</span>
-                                )}
-                              </td>
-                              <td className="text-right px-3 py-1.5 font-mono text-green-600 dark:text-green-400">
-                                {f.additions > 0 ? `+${f.additions}` : ""}
-                              </td>
-                              <td className="text-right px-3 py-1.5 font-mono text-red-600 dark:text-red-400">
-                                {f.deletions > 0 ? `-${f.deletions}` : ""}
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
               </section>
 
               <Separator />

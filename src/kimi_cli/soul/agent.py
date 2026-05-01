@@ -432,6 +432,7 @@ async def load_agent(
         )
 
     toolset = KimiToolset()
+    toolset.set_runtime(runtime)
     tool_deps = {
         KimiToolset: toolset,
         Runtime: runtime,

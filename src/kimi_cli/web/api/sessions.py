@@ -728,6 +728,46 @@ async def update_session_model_params(
     }
 
 
+class GuardianSettingsRequest(BaseModel):
+    enabled: bool
+    model: str | None = Field(default=None)
+
+
+@router.get("/{session_id}/guardian", summary="Get guardian AI settings")
+async def get_session_guardian(
+    session_id: UUID,
+    runner: KimiCLIRunner = Depends(get_runner),
+) -> dict[str, Any]:
+    """Get guardian AI dual-check settings for a session."""
+    from kimi_cli.session_state import load_session_state
+
+    session = get_editable_session(session_id, runner)
+    session_dir = session.kimi_cli_session.dir
+    state = load_session_state(session_dir)
+    return {
+        "enabled": state.guardian_enabled,
+        "model": state.guardian_model,
+    }
+
+
+@router.put("/{session_id}/guardian", summary="Update guardian AI settings")
+async def update_session_guardian(
+    session_id: UUID,
+    request: GuardianSettingsRequest,
+    runner: KimiCLIRunner = Depends(get_runner),
+) -> dict[str, Any]:
+    """Update guardian AI dual-check settings for a session."""
+    from kimi_cli.session_state import load_session_state, save_session_state
+
+    session = get_editable_session(session_id, runner)
+    session_dir = session.kimi_cli_session.dir
+    state = load_session_state(session_dir)
+    state.guardian_enabled = request.enabled
+    state.guardian_model = request.model
+    save_session_state(state, session_dir)
+    return {"success": True, "enabled": state.guardian_enabled, "model": state.guardian_model}
+
+
 @router.get("/{session_id}/instructions", summary="Get instruction files for session")
 async def get_session_instructions(
     session_id: UUID,

@@ -33,6 +33,9 @@ from kimi_cli import logger
 from kimi_cli.exception import InvalidToolError, MCPRuntimeError
 from kimi_cli.hooks.engine import HookEngine
 from kimi_cli.tools import SkipThisTool
+
+if TYPE_CHECKING:
+    from kimi_cli.soul.agent import Runtime
 from kimi_cli.wire.types import (
     AudioURLPart,
     ContentPart,
@@ -98,9 +101,13 @@ class KimiToolset:
         self._mcp_loading_task: asyncio.Task[None] | None = None
         self._deferred_mcp_load: tuple[list[MCPConfig], Runtime] | None = None
         self._hook_engine: HookEngine = HookEngine()
+        self._runtime: Runtime | None = None
 
     def set_hook_engine(self, engine: HookEngine) -> None:
         self._hook_engine = engine
+
+    def set_runtime(self, runtime: Runtime) -> None:
+        self._runtime = runtime
 
     def add(self, tool: ToolType) -> None:
         self._tool_dict[tool.name] = tool
@@ -159,6 +166,26 @@ class KimiToolset:
 
             async def _call():
                 tool_input_dict = arguments if isinstance(arguments, dict) else {}
+
+                # --- Guardian AI (dual-check) ---
+                if self._runtime is not None:
+                    from kimi_cli.guardian import load_guardian_for_session
+
+                    guardian = load_guardian_for_session(
+                        self._runtime.session, self._runtime
+                    )
+                    if guardian is not None:
+                        guardian_result = await guardian.check(
+                            tool_call.function.name, tool_input_dict
+                        )
+                        if guardian_result.action == "block":
+                            return ToolResult(
+                                tool_call_id=tool_call.id,
+                                return_value=ToolError(
+                                    message=guardian_result.reason or "Blocked by Guardian AI",
+                                    brief="Guardian blocked",
+                                ),
+                            )
 
                 # --- PreToolUse ---
                 from kimi_cli.hooks import events
