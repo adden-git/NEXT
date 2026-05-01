@@ -1,174 +1,180 @@
-# Kimi Code CLI
+# Kimi Code CLI — Web UI Edition
 
-[![Commit Activity](https://img.shields.io/github/commit-activity/w/MoonshotAI/kimi-cli)](https://github.com/MoonshotAI/kimi-cli/graphs/commit-activity)
-[![Checks](https://img.shields.io/github/check-runs/MoonshotAI/kimi-cli/main)](https://github.com/MoonshotAI/kimi-cli/actions)
-[![Version](https://img.shields.io/pypi/v/kimi-cli)](https://pypi.org/project/kimi-cli/)
-[![Downloads](https://img.shields.io/pypi/dw/kimi-cli)](https://pypistats.org/packages/kimi-cli)
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MoonshotAI/kimi-cli)
+[![Version](https://img.shields.io/github/v/tag/adden-git/kimi-next)](https://github.com/adden-git/kimi-next/releases)
+[![License](https://img.shields.io/github/license/adden-git/kimi-next)](LICENSE)
 
-[Kimi Code](https://www.kimi.com/code/) | [Documentation](https://moonshotai.github.io/kimi-cli/en/) | [文档](https://moonshotai.github.io/kimi-cli/zh/)
+**Kimi Code CLI с веб-интерфейсом** — AI-агент для разработки программного обеспечения, который работает прямо в браузере. Управляйте сессиями, редактируйте файлы, запускайте команды в терминале и общайтесь с нейросетью через удобный веб-UI.
 
-Kimi Code CLI is an AI agent that runs in the terminal, helping you complete software development tasks and terminal operations. It can read and edit code, execute shell commands, search and fetch web pages, and autonomously plan and adjust actions during execution.
+> 🚀 **Демо:** [http://94.241.142.95:5500](http://94.241.142.95:5500)  
+> 📦 **Оригинал:** [MoonshotAI/kimi-cli](https://github.com/MoonshotAI/kimi-cli)
 
-## Getting Started
+---
 
-See [Getting Started](https://moonshotai.github.io/kimi-cli/en/guides/getting-started.html) for how to install and start using Kimi Code CLI.
+## ✨ Возможности
 
-## Key Features
+### 🤖 AI-агент в браузере
+- Интерактивный чат с Kimi (K2.5 / K2.6) для написания кода, рефакторинга, отладки
+- Автономное планирование задач и выполнение shell-команд
+- Чтение и редактирование файлов проекта прямо из чата
 
-### Shell command mode
+### 🛡️ Guardian AI — двойная проверка
+- Перед каждым выполнением инструмента второй LLM проверяет безопасность
+- Поддержка дешёвых моделей (Fireworks, OpenRouter) для проверки
+- Защита от случайного удаления файлов и выполнения опасных команд
 
-Kimi Code CLI is not only a coding agent, but also a shell. You can switch the shell command mode by pressing `Ctrl-X`. In this mode, you can directly run shell commands without leaving Kimi Code CLI.
+### 📁 Файловый менеджер
+- Просмотр, редактирование и загрузка файлов через веб-интерфейс
+- Поддержка CodeMirror с подсветкой синтаксиса
+- Тёмная и светлая темы
 
-![](./docs/media/shell-mode.gif)
+### 💻 Встроенный терминал
+- SSH-доступ к серверу через браузер
+- Полноценная terminal emulator на xterm.js
+- Синхронизация темы с основным интерфейсом
 
-> [!NOTE]
-> Built-in shell commands like `cd` are not supported yet.
+### ⚙️ Гибкие настройки
+- **Глобальные настройки:** провайдеры LLM, модели, loop control, MCP, сервисы
+- **Настройки сессии:** temperature, top_p, max_tokens, thinking_keep, Guardian AI
+- **Git diff** прямо в настройках сессии — видьте изменения перед коммитом
+- Поддержка нескольких провайдеров: Kimi, OpenAI, Anthropic, Fireworks, OpenRouter
 
-### VS Code extension
+### 🎨 Темы оформления
+- 5 цветовых схем: тёмная, светлая, neon, matrix, molten
+- Переключение в один клик
 
-Kimi Code CLI can be integrated with [Visual Studio Code](https://code.visualstudio.com/) via the [Kimi Code VS Code Extension](https://marketplace.visualstudio.com/items?itemName=moonshot-ai.kimi-code).
+---
 
-![VS Code Extension](./docs/media/vscode.png)
+## 🚀 Быстрый старт
 
-### IDE integration via ACP
+### Установка
 
-Kimi Code CLI supports [Agent Client Protocol] out of the box. You can use it together with any ACP-compatible editor or IDE.
+```bash
+# Клонирование репозитория
+git clone https://github.com/adden-git/kimi-next.git
+cd kimi-next
 
-[Agent Client Protocol]: https://github.com/agentclientprotocol/agent-client-protocol
+# Установка Python-зависимостей
+uv sync
 
-To use Kimi Code CLI with ACP clients, make sure to run Kimi Code CLI in the terminal and send `/login` to complete the login first. Then, you can configure your ACP client to start Kimi Code CLI as an ACP agent server with command `kimi acp`.
+# Установка Node.js-зависимостей и сборка фронтенда
+cd web && npm install && npm run build && cd ..
 
-For example, to use Kimi Code CLI with [Zed](https://zed.dev/) or [JetBrains](https://blog.jetbrains.com/ai/2025/12/bring-your-own-ai-agent-to-jetbrains-ides/), add the following configuration to your `~/.config/zed/settings.json` or `~/.jetbrains/acp.json` file:
+# Копирование статики
+cp -r web/dist/* src/kimi_cli/web/static/
 
-```json
-{
-  "agent_servers": {
-    "Kimi Code CLI": {
-      "type": "custom",
-      "command": "kimi",
-      "args": ["acp"],
-      "env": {}
-    }
-  }
-}
+# Запуск сервера
+uv run python run_dev.py
 ```
 
-Then you can create Kimi Code CLI threads in IDE's agent panel.
+Сервер запустится на `http://0.0.0.0:5500`.
 
-![](./docs/media/acp-integration.gif)
+### Конфигурация
 
-### Zsh integration
+Создайте файл `~/.kimi/config.toml`:
 
-You can use Kimi Code CLI together with Zsh, to empower your shell experience with AI agent capabilities.
+```toml
+default_model = "kimi-for-coding"
+default_thinking = true
 
-Install the [zsh-kimi-cli](https://github.com/MoonshotAI/zsh-kimi-cli) plugin via:
+[models.kimi-for-coding]
+provider = "kimi-for-coding"
+model = "kimi-for-coding"
+max_context_size = 262144
+capabilities = ["thinking", "image_in"]
 
-```sh
-git clone https://github.com/MoonshotAI/zsh-kimi-cli.git \
-  ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/kimi-cli
+[providers.kimi-for-coding]
+type = "kimi"
+base_url = "https://api.kimi.com/coding/v1"
+api_key = "YOUR_API_KEY"
 ```
 
-> [!NOTE]
-> If you are using a plugin manager other than Oh My Zsh, you may need to refer to the plugin's README for installation instructions.
+---
 
-Then add `kimi-cli` to your Zsh plugin list in `~/.zshrc`:
+## 🏗️ Архитектура
 
-```sh
-plugins=(... kimi-cli)
+```
+┌─────────────────┐     WebSocket      ┌──────────────────┐
+│   React 19 UI   │ ◄────────────────► │  FastAPI Backend │
+│   (Vite +       │                    │  (Python 3.12+)  │
+│   shadcn/ui)    │     HTTP / API     │                  │
+└─────────────────┘                    └──────────────────┘
+        │                                       │
+        │ static files                          │ KimiSoul
+        ▼                                       ▼
+┌─────────────────┐                      ┌──────────────────┐
+│ files.html      │                      │  LLM (Kimi/      │
+│ ssh.html        │                      │  OpenAI/etc)     │
+│ (standalone)    │                      │                  │
+└─────────────────┘                      └──────────────────┘
 ```
 
-After restarting Zsh, you can switch to agent mode by pressing `Ctrl-X`.
+### Технологии
 
-### MCP support
+- **Фронтенд:** React 19, Vite, Tailwind CSS, shadcn/ui, Radix UI
+- **Бэкенд:** FastAPI, uvicorn, asyncio
+- **LLM:** kosong (абстракция над провайдерами)
+- **Сессии:** WebSocket для real-time чата, JSON-RPC wire protocol
 
-Kimi Code CLI supports MCP (Model Context Protocol) tools.
+---
 
-**`kimi mcp` sub-command group**
+## 🛡️ Guardian AI
 
-You can manage MCP servers with `kimi mcp` sub-command group. For example:
+Guardian AI — это система двойной проверки, которая запускает второй LLM перед каждым вызовом инструмента (Shell, WriteFile, StrReplaceFile и т.д.).
 
-```sh
-# Add streamable HTTP server:
-kimi mcp add --transport http context7 https://mcp.context7.com/mcp --header "CONTEXT7_API_KEY: ctx7sk-your-key"
+**Как включить:**
+1. Откройте настройки сессии (⚙️ в чате)
+2. Включите toggle «Guardian AI»
+3. Выберите модель для проверки (рекомендуется Fireworks Llama 3.1 8B — $0.20/MTok)
 
-# Add streamable HTTP server with OAuth authorization:
-kimi mcp add --transport http --auth oauth linear https://mcp.linear.app/mcp
+**Рекомендуемые модели для Guardian:**
 
-# Add stdio server:
-kimi mcp add --transport stdio chrome-devtools -- npx chrome-devtools-mcp@latest
+| Модель | Цена | Стоимость проверки |
+|--------|------|-------------------|
+| Llama 3.2 3B (Fireworks) | $0.10/MTok | ~$0.00007 |
+| Llama 3.1 8B (Fireworks) | $0.20/MTok | ~$0.00014 |
+| Qwen2.5 7B (Fireworks) | $0.20/MTok | ~$0.00014 |
+| DeepSeek V3 (Fireworks) | $0.56/MTok | ~$0.00040 |
 
-# List added MCP servers:
-kimi mcp list
+---
 
-# Remove an MCP server:
-kimi mcp remove chrome-devtools
+## 📁 Структура проекта
 
-# Authorize an MCP server:
-kimi mcp auth linear
+```
+kimi-next/
+├── web/                          # React frontend
+│   ├── src/
+│   │   ├── components/           # UI компоненты
+│   │   ├── features/             # Chat, sessions
+│   │   └── hooks/                # use-theme, useSessionStream
+│   └── dist/                     # Production build
+├── src/kimi_cli/                 # Python backend
+│   ├── web/                      # FastAPI app
+│   │   ├── api/                  # Routes (sessions, config)
+│   │   └── static/               # files.html, ssh.html
+│   ├── soul/                     # KimiSoul, agent loop
+│   ├── tools/                    # Built-in tools
+│   └── guardian.py               # Guardian AI module
+├── packages/                     # Workspace deps
+│   ├── kosong/                   # LLM abstraction
+│   └── kaos/                     # OS abstraction
+└── docs/                         # VitePress documentation
 ```
 
-**Ad-hoc MCP configuration**
+---
 
-Kimi Code CLI also supports ad-hoc MCP server configuration via CLI option.
+## 📝 Лицензия
 
-Given an MCP config file in the well-known MCP config format like the following:
+MIT License — см. [LICENSE](LICENSE)
 
-```json
-{
-  "mcpServers": {
-    "context7": {
-      "url": "https://mcp.context7.com/mcp",
-      "headers": {
-        "CONTEXT7_API_KEY": "YOUR_API_KEY"
-      }
-    },
-    "chrome-devtools": {
-      "command": "npx",
-      "args": ["-y", "chrome-devtools-mcp@latest"]
-    }
-  }
-}
-```
+---
 
-Run `kimi` with `--mcp-config-file` option to connect to the specified MCP servers:
+## 👤 Автор и контакты
 
-```sh
-kimi --mcp-config-file /path/to/mcp.json
-```
+**Разработчик:** AlpsStroy  
+**Telegram:** [@alpsstroy](https://t.me/alpsstroy)
 
-### More
+По всем вопросам, багам и предложениям — пишите в Telegram.
 
-See more features in the [Documentation](https://moonshotai.github.io/kimi-cli/en/).
+---
 
-## Development
-
-To develop Kimi Code CLI, run:
-
-```sh
-git clone https://github.com/MoonshotAI/kimi-cli.git
-cd kimi-cli
-
-make prepare  # prepare the development environment
-```
-
-Then you can start working on Kimi Code CLI.
-
-Refer to the following commands after you make changes:
-
-```sh
-uv run kimi  # run Kimi Code CLI
-
-make format  # format code
-make check  # run linting and type checking
-make test  # run tests
-make test-kimi-cli  # run Kimi Code CLI tests only
-make test-kosong  # run kosong tests only
-make test-pykaos  # run pykaos tests only
-make build-web  # build the web UI and sync it into the package (requires Node.js/npm)
-make build  # build python packages
-make build-bin  # build standalone binary
-make help  # show all make targets
-```
-
-Note: `make build` and `make build-bin` automatically run `make build-web` to embed the web UI.
+> ⚠️ **Внимание:** Это форк оригинального [Kimi Code CLI](https://github.com/MoonshotAI/kimi-cli) от Moonshot AI с добавлением веб-интерфейса и дополнительных функций. Оригинальная документация доступна на [moonshotai.github.io/kimi-cli](https://moonshotai.github.io/kimi-cli/).
