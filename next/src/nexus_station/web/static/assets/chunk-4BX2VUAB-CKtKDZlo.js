@@ -1,0 +1,1 @@
+import{_ as i}from"./vendor-heavy-CI3Wo9TY.js";function t(c,e){c.accDescr&&e.setAccDescription?.(c.accDescr),c.accTitle&&e.setAccTitle?.(c.accTitle),c.title&&e.setDiagramTitle?.(c.title)}i(t,"populateCommonDb");export{t as p};

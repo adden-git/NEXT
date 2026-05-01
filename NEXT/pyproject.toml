@@ -1,0 +1,50 @@
+[project]
+name = "nexus-station"
+version = "2.0.0"
+description = "NEXUS — Neural EXecution Universal System. Space-station AI interface for software development."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [
+    { name = "Zemskov Igor", email = "" },
+]
+keywords = ["ai", "agent", "llm", "code", "space", "nexus"]
+
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn[standard]>=0.29.0",
+    "pydantic>=2.6.0",
+    "python-multipart>=0.0.9",
+    "websockets>=12.0",
+    "httpx>=0.27.0",
+    "aiofiles>=23.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.3.0",
+    "pyright>=1.1.350",
+]
+
+[project.scripts]
+nexus = "nexus_core.web.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nexus_core"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "UP", "B", "SIM", "I"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "basic"

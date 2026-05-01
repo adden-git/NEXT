@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NEXUS — Neural EXecution Universal System</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+</head>
+<body>
+    <canvas id="starfield"></canvas>
+    <div class="scanlines"></div>
+    
+    <div class="app-container">
+        <!-- HEADER -->
+        <header class="station-header">
+            <div class="logo">
+                <span class="logo-icon">◈</span>
+                <span class="logo-text">NEXUS</span>
+                <span class="logo-sub">STATION AI // v2.0.0</span>
+            </div>
+            <div class="station-status">
+                <div class="status-item">
+                    <span class="status-dot online"></span>
+                    <span>CORE: ONLINE</span>
+                </div>
+                <div class="status-item">
+                    <span class="status-dot" id="provider-dot"></span>
+                    <span id="provider-name">PROVIDER: STANDBY</span>
+                </div>
+                <div class="status-item time" id="station-time">00:00:00</div>
+            </div>
+        </header>
+
+        <!-- MAIN GRID -->
+        <main class="station-grid">
+            <!-- LEFT: NAVIGATION (Files/SSH) -->
+            <aside class="panel nav-panel">
+                <div class="panel-header">
+                    <span class="panel-icon">🗂️</span>
+                    <span>NAVIGATION</span>
+                </div>
+                <div class="nav-tabs">
+                    <button class="nav-tab active" data-tab="files">📁 FILES</button>
+                    <button class="nav-tab" data-tab="terminal">💻 TERMINAL</button>
+                </div>
+                <div class="panel-content" id="nav-content">
+                    <div class="file-tree" id="file-tree">
+                        <div class="tree-item">
+                            <span class="tree-icon">📂</span>
+                            <span>mission-control/</span>
+                        </div>
+                        <div class="tree-item indent">
+                            <span class="tree-icon">📄</span>
+                            <span>config.yaml</span>
+                        </div>
+                        <div class="tree-item indent">
+                            <span class="tree-icon">📄</span>
+                            <span>main.py</span>
+                        </div>
+                        <div class="tree-item">
+                            <span class="tree-icon">📂</span>
+                            <span>logs/</span>
+                        </div>
+                        <div class="tree-item">
+                            <span class="tree-icon">📂</span>
+                            <span>modules/</span>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- CENTER: COMMS (Chat) -->
+            <section class="panel comms-panel">
+                <div class="panel-header">
+                    <span class="panel-icon">📡</span>
+                    <span>COMMS CHANNEL</span>
+                    <span class="panel-badge" id="msg-count">0</span>
+                </div>
+                <div class="comms-messages" id="comms-messages">
+                    <div class="comms-welcome">
+                        <div class="welcome-line">═══════════════════════════════════════</div>
+                        <div class="welcome-title">◈ NEXUS STATION ◈</div>
+                        <div class="welcome-sub">Neural EXecution Universal System</div>
+                        <div class="welcome-line">═══════════════════════════════════════</div>
+                        <div class="welcome-hint">
+                            Добро пожаловать на борт, Коммандер.<br>
+                            NEXUS готов к выполнению миссий.<br>
+                            Введите команду или запрос для начала работы.
+                        </div>
+                    </div>
+                </div>
+                <div class="comms-input-area">
+                    <div class="input-hud">
+                        <span class="hud-label">TRANSMIT</span>
+                        <span class="hud-sep">│</span>
+                        <span class="hud-mode" id="input-mode">TEXT</span>
+                    </div>
+                    <div class="input-wrapper">
+                        <textarea 
+                            id="transmit-input" 
+                            placeholder="Введите запрос для NEXUS..."
+                            rows="1"
+                        ></textarea>
+                        <button class="transmit-btn" id="transmit-btn">
+                            <span>➤</span>
+                            <span class="btn-label">TRANSMIT</span>
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- RIGHT: SYSTEMS (Settings) -->
+            <aside class="panel systems-panel">
+                <div class="panel-header">
+                    <span class="panel-icon">⚙️</span>
+                    <span>SYSTEMS</span>
+                </div>
+                <div class="panel-content systems-content">
+                    <div class="system-section">
+                        <div class="section-title">🔗 PROVIDER</div>
+                        <select class="system-select" id="provider-select">
+                            <option value="">Выберите провайдер...</option>
+                            <option value="openai">OpenAI — GPT-4o</option>
+                            <option value="anthropic">Anthropic — Claude 3.5</option>
+                            <option value="google">Google — Gemini Pro</option>
+                            <option value="fireworks">Fireworks — Llama 3</option>
+                            <option value="local">Local — Ollama</option>
+                        </select>
+                    </div>
+
+                    <div class="system-section">
+                        <div class="section-title">🧠 MODEL PARAMS</div>
+                        <div class="param-row">
+                            <label>Temperature</label>
+                            <input type="range" min="0" max="200" value="70" id="temp-slider">
+                            <span class="param-value" id="temp-value">0.7</span>
+                        </div>
+                        <div class="param-row">
+                            <label>Max Tokens</label>
+                            <input type="range" min="1" max="100" value="40" id="tokens-slider">
+                            <span class="param-value" id="tokens-value">4096</span>
+                        </div>
+                        <div class="param-row">
+                            <label>Top P</label>
+                            <input type="range" min="0" max="100" value="90" id="topp-slider">
+                            <span class="param-value" id="topp-value">0.9</span>
+                        </div>
+                    </div>
+
+                    <div class="system-section">
+                        <div class="section-title">🛡️ SHIELD AI</div>
+                        <div class="toggle-row">
+                            <label>Двойная проверка</label>
+                            <label class="toggle">
+                                <input type="checkbox" id="shield-toggle">
+                                <span class="toggle-slider"></span>
+                            </label>
+                        </div>
+                        <select class="system-select" id="shield-model">
+                            <option>Llama 3.2 3B — $0.10/MTok</option>
+                            <option>Qwen2.5 7B — $0.20/MTok</option>
+                            <option>DeepSeek V3 — $0.56/MTok</option>
+                        </select>
+                    </div>
+
+                    <div class="system-section">
+                        <div class="section-title">🎨 THEME</div>
+                        <div class="theme-buttons">
+                            <button class="theme-btn active" data-theme="void">VOID</button>
+                            <button class="theme-btn" data-theme="nebula">NEBULA</button>
+                            <button class="theme-btn" data-theme="solar">SOLAR</button>
+                            <button class="theme-btn" data-theme="matrix">MATRIX</button>
+                        </div>
+                    </div>
+                </div>
+            </aside>
+        </main>
+
+        <!-- FOOTER -->
+        <footer class="station-footer">
+            <div class="footer-left">
+                <span>NEXUS v2.0.0</span>
+                <span class="sep">│</span>
+                <span>Zemskov Igor</span>
+            </div>
+            <div class="footer-center">
+                <span class="blink">▶</span>
+                <span>СИСТЕМА АКТИВНА</span>
+                <span class="blink">◀</span>
+            </div>
+            <div class="footer-right">
+                <span>Telegram: @alpsstroy1</span>
+            </div>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

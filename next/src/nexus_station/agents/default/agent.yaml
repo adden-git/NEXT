@@ -1,0 +1,36 @@
+version: 1
+agent:
+  name: ""
+  system_prompt_path: ./system.md
+  system_prompt_args:
+    ROLE_ADDITIONAL: ""
+  tools:
+    - "nexus_station.tools.agent:Agent"
+    # - "nexus_station.tools.dmail:SendDMail"
+    # - "nexus_station.tools.think:Think"
+    - "nexus_station.tools.ask_user:AskUserQuestion"
+    - "nexus_station.tools.todo:SetTodoList"
+    - "nexus_station.tools.shell:Shell"
+    - "nexus_station.tools.background:TaskList"
+    - "nexus_station.tools.background:TaskOutput"
+    - "nexus_station.tools.background:TaskStop"
+    - "nexus_station.tools.file:ReadFile"
+    - "nexus_station.tools.file:ReadMediaFile"
+    - "nexus_station.tools.file:Glob"
+    - "nexus_station.tools.file:Grep"
+    - "nexus_station.tools.file:WriteFile"
+    - "nexus_station.tools.file:StrReplaceFile"
+    - "nexus_station.tools.web:SearchWeb"
+    - "nexus_station.tools.web:FetchURL"
+    - "nexus_station.tools.plan:ExitPlanMode"
+    - "nexus_station.tools.plan.enter:EnterPlanMode"
+  subagents:
+    coder:
+      path: ./coder.yaml
+      description: "Good at general software engineering tasks."
+    explore:
+      path: ./explore.yaml
+      description: "Fast codebase exploration with prompt-enforced read-only behavior."
+    plan:
+      path: ./plan.yaml
+      description: "Read-only implementation planning and architecture design."

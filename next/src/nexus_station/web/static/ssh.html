@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="kimi-dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>SSH терминал</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+  /* ========== THEME VARIABLES ========== */
+  :root[data-theme="kimi-light"] {
+    --bg: #ffffff; --bg-2: #f8f8f8; --bg-3: #f0f0f0;
+    --fg: #1a1a1a; --fg-2: #555555; --fg-3: #888888;
+    --accent: #3b82f6; --accent-2: #2563eb; --border: #e5e5e5;
+    --shadow: 0 1px 3px rgba(0,0,0,0.08);
+    --term-bg: #ffffff; --term-fg: #1a1a1a; --term-cursor: #3b82f6;
+    --term-selection: rgba(59,130,246,0.2);
+    --success: #22c55e; --error: #ef4444;
+  }
+  :root[data-theme="kimi-dark"] {
+    --bg: #0f0f13; --bg-2: #16161c; --bg-3: #1e1e26;
+    --fg: #e8e8e8; --fg-2: #a0a0b0; --fg-3: #606070;
+    --accent: #60a5fa; --accent-2: #3b82f6; --border: #2a2a36;
+    --shadow: 0 4px 12px rgba(0,0,0,0.4);
+    --term-bg: #0f0f13; --term-fg: #e8e8e8; --term-cursor: #60a5fa;
+    --term-selection: rgba(96,165,250,0.25);
+    --success: #4ade80; --error: #f87171;
+  }
+  :root[data-theme="neon"] {
+    --bg: #080814; --bg-2: #0e0e20; --bg-3: #161630;
+    --fg: #e0e0ff; --fg-2: #a0a0d0; --fg-3: #606090;
+    --accent: #00f0ff; --accent-2: #00c8ff; --border: #1e1e40;
+    --shadow: 0 0 12px rgba(0,240,255,0.15);
+    --term-bg: #080814; --term-fg: #00ff88; --term-cursor: #ff00ff;
+    --term-selection: rgba(0,240,255,0.25);
+    --success: #00ff88; --error: #ff0055;
+  }
+  :root[data-theme="matrix"] {
+    --bg: #000000; --bg-2: #050a05; --bg-3: #0a150a;
+    --fg: #00ff41; --fg-2: #00cc33; --fg-3: #006611;
+    --accent: #00ff41; --accent-2: #00dd33; --border: #003300;
+    --shadow: 0 0 12px rgba(0,255,65,0.15);
+    --term-bg: #000000; --term-fg: #00ff41; --term-cursor: #00ff41;
+    --term-selection: rgba(0,255,65,0.25);
+    --success: #00ff41; --error: #ff3333;
+  }
+  :root[data-theme="molten"] {
+    --bg: #120a05; --bg-2: #1e120a; --bg-3: #2a1a10;
+    --fg: #ffe0c0; --fg-2: #d0a080; --fg-3: #806040;
+    --accent: #ff6600; --accent-2: #ff4400; --border: #3a2010;
+    --shadow: 0 0 12px rgba(255,102,0,0.15);
+    --term-bg: #120a05; --term-fg: #ffaa66; --term-cursor: #ff4400;
+    --term-selection: rgba(255,102,0,0.25);
+    --success: #ffaa66; --error: #ff3333;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; }
+  body {
+    font-family: 'Inter', system-ui, -apple-system, sans-serif;
+    background: var(--bg); color: var(--fg);
+    display: flex; flex-direction: column;
+  }
+
+  /* Header */
+  .header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 8px 12px; background: var(--bg-2);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0; box-shadow: var(--shadow);
+  }
+  .header-left { display: flex; align-items: center; gap: 10px; }
+  .header-right { display: flex; align-items: center; gap: 8px; }
+  .back-link {
+    text-decoration: none; background: var(--bg-3); color: var(--accent);
+    padding: 5px 10px; border-radius: 6px; font-size: 12px; font-weight: 600;
+    border: 1px solid var(--border); transition: all .15s; white-space: nowrap;
+  }
+  .back-link:hover { background: var(--accent); color: var(--bg); }
+  .title { font-size: 13px; font-weight: 600; color: var(--fg-2); letter-spacing: 0.3px; }
+  .btn {
+    background: var(--bg-3); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 5px 10px; cursor: pointer; font-weight: 600;
+    font-size: 12px; font-family: inherit; transition: all .15s; white-space: nowrap;
+  }
+  .btn:hover { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  .btn.primary { background: var(--accent); color: var(--bg); border-color: var(--accent); }
+  .btn.primary:hover { background: var(--accent-2); border-color: var(--accent-2); }
+  .theme-select {
+    background: var(--bg-3); color: var(--fg); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 8px; font-size: 12px; font-family: inherit; cursor: pointer;
+  }
+  .status-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--fg-3); display: inline-block;
+    transition: background .3s, box-shadow .3s;
+  }
+  .status-dot.on { background: var(--success); box-shadow: 0 0 6px var(--success); }
+  .status-dot.err { background: var(--error); box-shadow: 0 0 6px var(--error); }
+
+  /* Main panels */
+  #main { flex: 1; min-height: 0; position: relative; }
+  .panel { position: absolute; inset: 0; display: none; overflow: auto; }
+  .panel.active { display: block; }
+  #terminal-panel { padding: 6px; }
+  #terminal { width: 100%; height: 100%; border-radius: 8px; overflow: hidden; }
+  #logs-panel {
+    padding: 14px; font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 12px; white-space: pre-wrap; word-break: break-word;
+    color: var(--fg-2); background: var(--bg); line-height: 1.5;
+  }
+  #status-panel { padding: 14px; overflow: auto; }
+  .status-grid { display: grid; gap: 12px; }
+  .status-card {
+    background: var(--bg-2); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px; box-shadow: var(--shadow);
+  }
+  .status-card h4 {
+    margin: 0 0 8px; font-size: 11px; color: var(--accent);
+    text-transform: uppercase; letter-spacing: 0.6px; font-weight: 700;
+  }
+  .status-card pre {
+    margin: 0; font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 11px; white-space: pre-wrap; word-break: break-word;
+    color: var(--fg-2); line-height: 1.4;
+  }
+
+  /* Tabs */
+  .tabs {
+    display: flex; gap: 4px;
+    padding: 6px 10px;
+    background: var(--bg-2);
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .tab {
+    flex: 1; text-align: center; padding: 7px 6px;
+    font-size: 12px; font-weight: 600;
+    color: var(--fg-3); background: transparent;
+    border: 1px solid transparent; border-radius: 8px;
+    cursor: pointer; font-family: inherit;
+    transition: all .15s;
+  }
+  .tab:hover { color: var(--fg-2); background: var(--bg-3); }
+  .tab.active { color: var(--accent); background: var(--bg-3); border-color: var(--border); }
+  .tab-badge {
+    display: inline-block; background: var(--error); color: #fff;
+    font-size: 9px; padding: 1px 5px; border-radius: 10px;
+    margin-left: 4px; vertical-align: middle; font-weight: 700;
+  }
+
+  /* Context menu for terminal */
+  .ctx-menu {
+    position: fixed; background: var(--bg-2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 4px; box-shadow: var(--shadow);
+    z-index: 1000; display: none; min-width: 160px;
+  }
+  .ctx-menu-item {
+    padding: 8px 12px; font-size: 13px; cursor: pointer;
+    border-radius: 6px; color: var(--fg); white-space: nowrap;
+  }
+  .ctx-menu-item:hover { background: var(--bg-3); }
+  .ctx-menu-item.danger { color: var(--error); }
+
+  /* Mobile adaptations */
+  @media (max-width: 640px) {
+    .header { padding: 6px 8px; }
+    .title { display: none; }
+    .back-link { padding: 4px 8px; font-size: 11px; }
+    .theme-select { padding: 3px 6px; font-size: 11px; }
+    .btn { padding: 4px 8px; font-size: 11px; }
+    .tabs { padding: 4px 6px; }
+    .tab { padding: 6px 4px; font-size: 11px; }
+    #terminal-panel { padding: 4px; }
+    #logs-panel { padding: 10px; font-size: 11px; }
+    #status-panel { padding: 10px; }
+    .status-card { padding: 10px; }
+    .status-card pre { font-size: 10px; }
+  }
+
+  /* xterm override to match theme */
+  .xterm-screen { background: var(--term-bg) !important; }
+  .xterm-rows { color: var(--term-fg) !important; }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--fg-3); border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--fg-2); }
+</style>
+</head>
+<body>
+<script>
+  (function() {
+    var stored = localStorage.getItem('kimi-theme');
+    var map = { dark: 'kimi-dark', light: 'kimi-light' };
+    var theme = map[stored] || stored || 'kimi-dark';
+    document.documentElement.setAttribute('data-theme', theme);
+  })();
+</script>
+<div class="header">
+  <div class="header-left">
+    <a href="/" class="back-link">← Кими</a>
+    <span class="title">SSH терминал</span>
+  </div>
+  <div class="header-right">
+    <select class="theme-select" id="themeSelect" onchange="changeTheme(this.value)" title="Тема">
+      <option value="kimi-light">☀️ Светлая</option>
+      <option value="kimi-dark" selected>🌙 Тёмная</option>
+      <option value="neon">💠 Неон</option>
+      <option value="matrix">🟢 Матрица</option>
+      <option value="molten">🔥 Плавленая</option>
+    </select>
+    <span class="status-dot" id="status-dot"></span>
+    <button class="btn primary" onclick="reconnect()" title="Переподключить">↻</button>
+  </div>
+</div>
+<div id="main">
+  <div class="panel active" id="terminal-panel"><div id="terminal"></div></div>
+  <div class="panel" id="logs-panel"></div>
+  <div class="panel" id="status-panel">
+    <div class="status-grid">
+      <div class="status-card"><h4>PM2 Статус</h4><pre id="pm2-out">Загрузка...</pre></div>
+      <div class="status-card"><h4>Диск</h4><pre id="disk-out">Загрузка...</pre></div>
+      <div class="status-card"><h4>Uptime / Load</h4><pre id="uptime-out">Загрузка...</pre></div>
+    </div>
+  </div>
+</div>
+<div class="tabs">
+  <button class="tab active" onclick="switchTab('terminal', this)">🖥 Терминал</button>
+  <button class="tab" onclick="switchTab('logs', this)">📋 Логи <span class="tab-badge" id="log-badge" style="display:none">0</span></button>
+  <button class="tab" onclick="switchTab('status', this)">📊 Статус</button>
+</div>
+
+<!-- Context menu -->
+<div class="ctx-menu" id="ctxMenu">
+  <div class="ctx-menu-item" onclick="ctxCopyAll()">📋 Копировать всё</div>
+  <div class="ctx-menu-item" onclick="ctxCopySelection()">📄 Копировать выделенное</div>
+  <div class="ctx-menu-item danger" onclick="ctxClear()">🗑 Очистить</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.min.js"></script>
+<script>
+  const THEMES = {
+    'kimi-light':  { bg:'#ffffff', fg:'#1a1a1a', cursor:'#3b82f6', selection:'rgba(59,130,246,0.2)' },
+    'kimi-dark':   { bg:'#0f0f13', fg:'#e8e8e8', cursor:'#60a5fa', selection:'rgba(96,165,250,0.25)' },
+    'neon':        { bg:'#080814', fg:'#00ff88', cursor:'#ff00ff', selection:'rgba(0,240,255,0.25)' },
+    'matrix':      { bg:'#000000', fg:'#00ff41', cursor:'#00ff41', selection:'rgba(0,255,65,0.25)' },
+    'molten':      { bg:'#120a05', fg:'#ffaa66', cursor:'#ff4400', selection:'rgba(255,102,0,0.25)' },
+  };
+
+  let currentTheme = localStorage.getItem('kimi_terminal_theme') || 'kimi-dark';
+  document.documentElement.setAttribute('data-theme', currentTheme);
+  document.getElementById('themeSelect').value = currentTheme;
+
+  const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+  const term = new Terminal({
+    fontSize: isMobile ? 12 : 14,
+    fontFamily: '"JetBrains Mono", ui-monospace, monospace',
+    theme: THEMES[currentTheme],
+    cursorBlink: true,
+    scrollback: 5000,
+  });
+  const fitAddon = new FitAddon.FitAddon();
+  term.loadAddon(fitAddon);
+  term.open(document.getElementById('terminal'));
+  fitAddon.fit();
+
+  let ws = null;
+  let terminalBuffer = '';
+  let logLines = [];
+  let currentTab = 'terminal';
+
+  // Long-press context menu for mobile
+  let longPressTimer = null;
+  const termEl = document.getElementById('terminal');
+  const ctxMenu = document.getElementById('ctxMenu');
+
+  function showCtxMenu(x, y) {
+    ctxMenu.style.display = 'block';
+    const rect = document.body.getBoundingClientRect();
+    let left = x;
+    let top = y;
+    if (left + ctxMenu.offsetWidth > rect.width) left = rect.width - ctxMenu.offsetWidth - 8;
+    if (top + ctxMenu.offsetHeight > rect.height) top = top - ctxMenu.offsetHeight;
+    ctxMenu.style.left = left + 'px';
+    ctxMenu.style.top = top + 'px';
+  }
+
+  function hideCtxMenu() {
+    ctxMenu.style.display = 'none';
+  }
+
+  document.addEventListener('click', (e) => {
+    if (!ctxMenu.contains(e.target)) hideCtxMenu();
+  });
+
+  termEl.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    showCtxMenu(e.clientX, e.clientY);
+  });
+
+  // Long press for mobile
+  termEl.addEventListener('touchstart', (e) => {
+    longPressTimer = setTimeout(() => {
+      const touch = e.touches[0];
+      showCtxMenu(touch.clientX, touch.clientY);
+    }, 600);
+  });
+  termEl.addEventListener('touchend', () => {
+    if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+  });
+  termEl.addEventListener('touchmove', () => {
+    if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+  });
+
+  function ctxCopyAll() {
+    hideCtxMenu();
+    copyTerminal();
+  }
+  function ctxCopySelection() {
+    hideCtxMenu();
+    copySelection();
+  }
+  function ctxClear() {
+    hideCtxMenu();
+    term.clear();
+    terminalBuffer = '';
+    logLines = [];
+    document.getElementById('logs-panel').textContent = '';
+  }
+
+  function changeTheme(name) {
+    currentTheme = name;
+    localStorage.setItem('kimi_terminal_theme', name);
+    document.documentElement.setAttribute('data-theme', name);
+    const t = THEMES[name];
+    term.options.theme = t;
+    term.refresh(0, term.rows - 1);
+  }
+
+  function getToken() {
+    const urlToken = new URL(location.href).searchParams.get('token');
+    return urlToken || localStorage.getItem('kimi_auth_token') || '';
+  }
+
+  function setStatus(msg, type) {
+    const dot = document.getElementById('status-dot');
+    dot.className = 'status-dot' + (type === 'ok' ? ' on' : type === 'err' ? ' err' : '');
+  }
+
+  function switchTab(name, el) {
+    currentTab = name;
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    document.getElementById(name + '-panel').classList.add('active');
+    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+    if (el) el.classList.add('active');
+    if (name === 'terminal') setTimeout(() => fitAddon.fit(), 10);
+    if (name === 'status') loadStatus();
+  }
+
+  function appendLog(data) {
+    logLines.push(data);
+    if (logLines.length > 2000) logLines = logLines.slice(-1000);
+    const panel = document.getElementById('logs-panel');
+    panel.textContent = logLines.join('');
+    if (currentTab !== 'logs') {
+      const badge = document.getElementById('log-badge');
+      badge.textContent = logLines.length;
+      badge.style.display = 'inline-block';
+    }
+  }
+
+  function connect(host, port, username, password, noPrompt) {
+    disconnect();
+    host = host || 'localhost';
+    port = port || 22;
+    username = username || 'root';
+    password = password || '';
+
+    const isLocalhost = (host === 'localhost' || host === '127.0.0.1');
+    if (!password && !isLocalhost && !noPrompt) {
+      const saved = sessionStorage.getItem('ssh_pass_' + username + '@' + host);
+      if (saved) {
+        password = saved;
+      } else {
+        const p = prompt('Введите пароль для ' + username + '@' + host + ':');
+        if (!p) { setStatus('Требуется пароль', 'err'); return; }
+        sessionStorage.setItem('ssh_pass_' + username + '@' + host, p);
+        password = p;
+      }
+    }
+
+    const token = getToken();
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(`${proto}//${location.host}/api/ssh/ws?token=${encodeURIComponent(token)}`);
+
+    ws.onopen = () => {
+      setStatus('Авторизация...');
+      ws.send(JSON.stringify({ host, port: Number(port), username, password }));
+    };
+
+    ws.onmessage = (ev) => {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === 'connected') {
+        setStatus('Подключено', 'ok');
+        const dims = fitAddon.proposeDimensions();
+        if (dims) {
+          ws.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }));
+        }
+      } else if (msg.type === 'stdout') {
+        term.write(msg.data);
+        terminalBuffer += msg.data;
+        appendLog(msg.data);
+        if (terminalBuffer.length > 500000) terminalBuffer = terminalBuffer.slice(-250000);
+      } else if (msg.type === 'error') {
+        setStatus('Ошибка', 'err');
+        term.write('\r\n\x1b[31mОшибка: ' + msg.data + '\x1b[0m\r\n');
+      }
+    };
+
+    ws.onclose = () => { setStatus('Отключено'); ws = null; };
+    ws.onerror = (e) => { setStatus('Ошибка WS', 'err'); };
+  }
+
+  function disconnect() {
+    if (ws) { ws.close(); ws = null; }
+    setStatus('Отключено');
+  }
+
+  function reconnect() {
+    const params = new URL(location.href).searchParams;
+    const host = params.get('host') || 'localhost';
+    const port = params.get('port') || '22';
+    const user = params.get('username') || 'root';
+    connect(host, port, user, '', true);
+  }
+
+  function copyTerminal() {
+    if (!terminalBuffer) return;
+    navigator.clipboard.writeText(terminalBuffer).then(() => {
+      setStatus('Скопировано', 'ok');
+      setTimeout(() => setStatus(ws ? 'Подключено' : 'Отключено', ws ? 'ok' : ''), 1500);
+    }).catch(() => {
+      const ta = document.createElement('textarea');
+      ta.value = terminalBuffer;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      setStatus('Скопировано', 'ok');
+      setTimeout(() => setStatus(ws ? 'Подключено' : 'Отключено', ws ? 'ok' : ''), 1500);
+    });
+  }
+
+  function copySelection() {
+    const sel = term.getSelection();
+    if (!sel) { setStatus('Ничего не выделено', 'err'); return; }
+    navigator.clipboard.writeText(sel).then(() => {
+      setStatus('Выделенное скопировано', 'ok');
+      setTimeout(() => setStatus(ws ? 'Подключено' : 'Отключено', ws ? 'ok' : ''), 1500);
+    }).catch(() => {
+      const ta = document.createElement('textarea');
+      ta.value = sel;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      setStatus('Выделенное скопировано', 'ok');
+      setTimeout(() => setStatus(ws ? 'Подключено' : 'Отключено', ws ? 'ok' : ''), 1500);
+    });
+  }
+
+  async function loadStatus() {
+    const token = getToken();
+    const headers = {};
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+    try {
+      const r = await fetch('/api/ssh/status', { headers });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const data = await r.json();
+      document.getElementById('pm2-out').textContent = data.pm2 || '—';
+      document.getElementById('disk-out').textContent = data.disk || '—';
+      document.getElementById('uptime-out').textContent = (data.uptime || '—') + '\nLoad: ' + (data.load || '—');
+    } catch (e) {
+      document.getElementById('pm2-out').textContent = 'Ошибка: ' + e.message;
+      document.getElementById('disk-out').textContent = '—';
+      document.getElementById('uptime-out').textContent = '—';
+    }
+  }
+
+  term.onData((data) => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'stdin', data }));
+    }
+  });
+
+  window.addEventListener('resize', () => {
+    fitAddon.fit();
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      const dims = fitAddon.proposeDimensions();
+      if (dims) {
+        ws.send(JSON.stringify({ type: 'resize', cols: dims.cols, rows: dims.rows }));
+      }
+    }
+  });
+
+  // Автоподключение
+  const params = new URL(location.href).searchParams;
+  if (params.get('auto') === '1') {
+    const host = params.get('host') || 'localhost';
+    const port = params.get('port') || '22';
+    const user = params.get('username') || 'root';
+    setTimeout(() => connect(host, port, user, '', true), 300);
+  }
+</script>
+</body>
+</html>

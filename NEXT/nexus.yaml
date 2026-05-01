@@ -1,0 +1,79 @@
+# ═══════════════════════════════════════════════════════════════
+# NEXUS Station Configuration
+# Neural EXecution Universal System v2.0.0
+# ═══════════════════════════════════════════════════════════════
+
+station:
+  name: "NEXUS STATION"
+  version: "2.0.0"
+  codename: "NEXT"
+  host: "0.0.0.0"
+  port: 5600
+
+# LLM Providers — add your API keys here
+providers:
+  openai:
+    name: "OpenAI"
+    type: "openai"
+    base_url: "https://api.openai.com/v1"
+    api_key: "${OPENAI_API_KEY}"
+    models:
+      - gpt-4o
+      - gpt-4o-mini
+
+  anthropic:
+    name: "Anthropic"
+    type: "anthropic"
+    base_url: "https://api.anthropic.com/v1"
+    api_key: "${ANTHROPIC_API_KEY}"
+    models:
+      - claude-3-5-sonnet-20241022
+      - claude-3-opus-20240229
+
+  fireworks:
+    name: "Fireworks AI"
+    type: "openai"
+    base_url: "https://api.fireworks.ai/inference/v1"
+    api_key: "${FIREWORKS_API_KEY}"
+    models:
+      - accounts/fireworks/models/llama-v3p1-8b-instruct
+      - accounts/fireworks/models/qwen2p5-7b-instruct
+
+  google:
+    name: "Google Gemini"
+    type: "openai"
+    base_url: "https://generativelanguage.googleapis.com/v1beta/openai"
+    api_key: "${GEMINI_API_KEY}"
+    models:
+      - gemini-1.5-pro
+      - gemini-1.5-flash
+
+  local:
+    name: "Local Ollama"
+    type: "openai"
+    base_url: "http://localhost:11434/v1"
+    api_key: "ollama"
+    models:
+      - llama3
+      - codellama
+      - mistral
+
+# Default settings
+defaults:
+  provider: "openai"
+  model: "gpt-4o"
+  temperature: 0.7
+  top_p: 0.9
+  max_tokens: 4096
+
+# Shield AI (Security)
+shield:
+  enabled: true
+  provider: "fireworks"
+  model: "accounts/fireworks/models/llama-v3p1-8b-instruct"
+
+# Mission Control
+missions:
+  max_steps_per_turn: 500
+  max_retries_per_step: 3
+  compaction_trigger_ratio: 0.85
