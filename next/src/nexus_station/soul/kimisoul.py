@@ -1232,7 +1232,7 @@ class NexusSoul:
     @staticmethod
     def _is_retryable_error(exception: BaseException) -> bool:
         if isinstance(exception, (APIConnectionError, APITimeoutError)):
-            return not bool(getattr(exception, "_kimi_recovery_exhausted", False))
+            return not bool(getattr(exception, "_nexus_recovery_exhausted", False))
         if isinstance(exception, APIEmptyResponseError):
             return True
         return isinstance(exception, APIStatusError) and exception.status_code in (
@@ -1293,7 +1293,7 @@ class NexusSoul:
                     error_type=type(error).__name__,
                     error=error,
                 )
-                error._kimi_recovery_exhausted = True  # type: ignore[attr-defined]
+                error._nexus_recovery_exhausted = True  # type: ignore[attr-defined]
                 raise
             if not isinstance(chat_provider, RetryableChatProvider):
                 raise

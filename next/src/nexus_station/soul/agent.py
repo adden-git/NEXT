@@ -47,21 +47,21 @@ if TYPE_CHECKING:
 class BuiltinSystemPromptArgs:
     """Builtin system prompt arguments."""
 
-    KIMI_NOW: str
+    NEXUS_NOW: str
     """The current datetime."""
-    KIMI_WORK_DIR: KaosPath
+    NEXUS_WORK_DIR: KaosPath
     """The absolute path of current working directory."""
-    KIMI_WORK_DIR_LS: str
+    NEXUS_WORK_DIR_LS: str
     """The directory listing of current working directory."""
-    KIMI_AGENTS_MD: str  # TODO: move to first message from system prompt
+    NEXUS_AGENTS_MD: str  # TODO: move to first message from system prompt
     """The merged content of AGENTS.md files (from project root to work_dir)."""
-    KIMI_SKILLS: str
+    NEXUS_SKILLS: str
     """Formatted information about available skills."""
-    KIMI_ADDITIONAL_DIRS_INFO: str
+    NEXUS_ADDITIONAL_DIRS_INFO: str
     """Formatted information about additional directories in the workspace."""
-    KIMI_OS: str
+    NEXUS_OS: str
     """The operating system kind, e.g. 'Windows', 'macOS', 'Linux'."""
-    KIMI_SHELL: str
+    NEXUS_SHELL: str
     """The shell executable used by the Shell tool, e.g. 'bash (`/bin/bash`)'."""
 
 
@@ -109,13 +109,13 @@ async def load_agents_md(work_dir: KaosPath) -> str | None:
     discovered: list[tuple[KaosPath, str]] = []  # (path, content)
     for d in dirs:
         # .nexus/AGENTS.md is always checked independently (can coexist with root-level file)
-        kimi_path = d / ".nexus" / "AGENTS.md"
+        agents_path = d / ".nexus" / "AGENTS.md"
         # AGENTS.md and agents.md are mutually exclusive (uppercase wins)
         root_candidates = [d / "AGENTS.md", d / "agents.md"]
 
         candidates: list[KaosPath] = []
-        if await kimi_path.is_file():
-            candidates.append(kimi_path)
+        if await agents_path.is_file():
+            candidates.append(agents_path)
         for rc in root_candidates:
             if await rc.is_file():
                 candidates.append(rc)
@@ -304,14 +304,14 @@ class Runtime:
             llm=llm,
             session=session,
             builtin_args=BuiltinSystemPromptArgs(
-                KIMI_NOW=datetime.now().astimezone().isoformat(),
-                KIMI_WORK_DIR=session.work_dir,
-                KIMI_WORK_DIR_LS=ls_output,
-                KIMI_AGENTS_MD=agents_md or "",
-                KIMI_SKILLS=skills_formatted or "No skills found.",
-                KIMI_ADDITIONAL_DIRS_INFO=additional_dirs_info,
-                KIMI_OS=environment.os_kind,
-                KIMI_SHELL=f"{environment.shell_name} (`{environment.shell_path}`)",
+                NEXUS_NOW=datetime.now().astimezone().isoformat(),
+                NEXUS_WORK_DIR=session.work_dir,
+                NEXUS_WORK_DIR_LS=ls_output,
+                NEXUS_AGENTS_MD=agents_md or "",
+                NEXUS_SKILLS=skills_formatted or "No skills found.",
+                NEXUS_ADDITIONAL_DIRS_INFO=additional_dirs_info,
+                NEXUS_OS=environment.os_kind,
+                NEXUS_SHELL=f"{environment.shell_name} (`{environment.shell_path}`)",
             ),
             denwa_renji=DenwaRenji(),
             approval=Approval(state=approval_state),

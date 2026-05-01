@@ -66,15 +66,15 @@ def augment_provider_with_env_vars(provider: LLMProvider, model: LLMModel) -> di
 
     match provider.type:
         case "kimi":
-            if base_url := os.getenv("KIMI_BASE_URL"):
+            if base_url := os.getenv("NEXUS_BASE_URL"):
                 provider.base_url = base_url
-                applied["KIMI_BASE_URL"] = base_url
-            if api_key := os.getenv("KIMI_API_KEY"):
+                applied["NEXUS_BASE_URL"] = base_url
+            if api_key := os.getenv("NEXUS_API_KEY"):
                 provider.api_key = SecretStr(api_key)
-                applied["KIMI_API_KEY"] = "******"
-            if model_name := os.getenv("KIMI_MODEL_NAME"):
+                applied["NEXUS_API_KEY"] = "******"
+            if model_name := os.getenv("NEXUS_MODEL_NAME"):
                 model.model = model_name
-                applied["KIMI_MODEL_NAME"] = model_name
+                applied["NEXUS_MODEL_NAME"] = model_name
             if max_context_size := os.getenv("KIMI_MODEL_MAX_CONTEXT_SIZE"):
                 model.max_context_size = int(max_context_size)
                 applied["KIMI_MODEL_MAX_CONTEXT_SIZE"] = max_context_size

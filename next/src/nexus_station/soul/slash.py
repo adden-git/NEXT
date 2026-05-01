@@ -44,7 +44,7 @@ async def init(soul: NexusSoul, args: str):
         tmp_soul = NexusSoul(soul.agent, context=tmp_context)
         await tmp_soul.run(prompts.INIT)
 
-    agents_md = await load_agents_md(soul.runtime.builtin_args.KIMI_WORK_DIR)
+    agents_md = await load_agents_md(soul.runtime.builtin_args.NEXUS_WORK_DIR)
     system_message = system(
         "The user just ran `/init` slash command. "
         "The system has analyzed the codebase and generated an `AGENTS.md` file. "
@@ -229,7 +229,7 @@ async def add_dir(soul: NexusSoul, args: str):
         return
 
     # Check if it's within the work_dir (already accessible)
-    work_dir = soul.runtime.builtin_args.KIMI_WORK_DIR
+    work_dir = soul.runtime.builtin_args.NEXUS_WORK_DIR
     if is_within_directory(path, work_dir):
         wire_send(TextPart(text=f"Directory is already within the working directory: {path}"))
         return

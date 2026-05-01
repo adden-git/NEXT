@@ -1,0 +1,37 @@
+INFO:     Started server process [201775]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:5600 (Press CTRL+C to quit)
+════════════════════════════════════════════════════════════
+  ◈ NEXUS STATION LICENSE CHECK ◈
+  STATION RECOVERED
+════════════════════════════════════════════════════════════
++================================================================+
+| ██╗  ██╗██╗███╗   ███╗██╗     ██████╗ ██████╗ ██████╗ ███████╗ |
+| ██║ ██╔╝██║████╗ ████║██║    ██╔════╝██╔═══██╗██╔══██╗██╔════╝ |
+| █████╔╝ ██║██╔████╔██║██║    ██║     ██║   ██║██║  ██║█████╗   |
+| ██╔═██╗ ██║██║╚██╔╝██║██║    ██║     ██║   ██║██║  ██║██╔══╝   |
+| ██║  ██╗██║██║ ╚═╝ ██║██║    ╚██████╗╚██████╔╝██████╔╝███████╗ |
+| ╚═╝  ╚═╝╚═╝╚═╝     ╚═╝╚═╝     ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝ |
+|                                                                |
+|                   WEB UI (Technical Preview)                   |
+|                                                                |
+|----------------------------------------------------------------|
+|                                                                |
+|   ➜  Local    http://localhost:5600                            |
+|   ➜  Network  http://94.241.142.95:5600                        |
+|                                                                |
+|   ⚠ AUTH DISABLED - Anyone on the network can access           |
+|                                                                |
+|----------------------------------------------------------------|
+|                                                                |
+|   ⚠ Mode: PUBLIC (all networks)                                |
+|     Anyone with the URL can access this instance               |
+|                                                                |
+|   Security tips:                                               |
+|     • Keep your auth token secure                              |
+|     • Consider using firewall or VPN                           |
+|                                                                |
++================================================================+
+INFO:     94.241.142.95:39646 - "GET / HTTP/1.1" 200 OK
+INFO:     94.241.142.95:44392 - "GET / HTTP/1.1" 200 OK

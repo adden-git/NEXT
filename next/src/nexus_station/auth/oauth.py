@@ -48,7 +48,7 @@ if TYPE_CHECKING:
 
 
 KIMI_CODE_CLIENT_ID = "17e5f671-d194-4dfb-9706-5516cb48c098"
-KIMI_CODE_OAUTH_KEY = "oauth/kimi-code"
+NEXUS_CODE_OAUTH_KEY = "oauth/kimi-code"
 DEFAULT_OAUTH_HOST = "https://auth.nexus.com"
 KEYRING_SERVICE = "kimi-code"
 REFRESH_INTERVAL_SECONDS = 60
@@ -682,7 +682,7 @@ async def login_kimi_code(
 
     assert token is not None
 
-    oauth_ref = OAuthRef(storage="file", key=KIMI_CODE_OAUTH_KEY)
+    oauth_ref = OAuthRef(storage="file", key=NEXUS_CODE_OAUTH_KEY)
     oauth_ref = save_tokens(oauth_ref, token)
 
     try:
@@ -721,8 +721,8 @@ async def logout_kimi_code(config: Config) -> AsyncIterator[OAuthEvent]:
         )
         return
 
-    delete_tokens(OAuthRef(storage="keyring", key=KIMI_CODE_OAUTH_KEY))
-    delete_tokens(OAuthRef(storage="file", key=KIMI_CODE_OAUTH_KEY))
+    delete_tokens(OAuthRef(storage="keyring", key=NEXUS_CODE_OAUTH_KEY))
+    delete_tokens(OAuthRef(storage="file", key=NEXUS_CODE_OAUTH_KEY))
 
     provider_key = managed_provider_key(KIMI_CODE_PLATFORM_ID)
     if provider_key in config.providers:
@@ -871,7 +871,7 @@ class OAuthManager:
             self._config.services.moonshot_search,
             self._config.services.moonshot_fetch,
         ):
-            if service and service.oauth and service.oauth.key == KIMI_CODE_OAUTH_KEY:
+            if service and service.oauth and service.oauth.key == NEXUS_CODE_OAUTH_KEY:
                 return service.oauth
         return None
 

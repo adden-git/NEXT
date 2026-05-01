@@ -17,7 +17,7 @@ from nexus_station.acp.tools import replace_tools
 from nexus_station.acp.types import ACPContentBlock, MCPServer
 from nexus_station.acp.version import ACPVersionSpec, negotiate_version
 from nexus_station.app import NexusCLI
-from nexus_station.auth.oauth import KIMI_CODE_OAUTH_KEY, load_tokens
+from nexus_station.auth.oauth import NEXUS_CODE_OAUTH_KEY, load_tokens
 from nexus_station.config import LLMModel, OAuthRef, load_config, save_config
 from nexus_station.constant import NAME, VERSION
 from nexus_station.llm import create_llm, derive_model_capabilities
@@ -115,7 +115,7 @@ class ACPServer:
     @staticmethod
     def _check_token_usable() -> str | None:
         """Return ``None`` if the persisted OAuth token is usable, else a reason string."""
-        ref = OAuthRef(storage="file", key=KIMI_CODE_OAUTH_KEY)
+        ref = OAuthRef(storage="file", key=NEXUS_CODE_OAUTH_KEY)
         token = load_tokens(ref)
 
         if token is None or not token.access_token:

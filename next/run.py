@@ -5,15 +5,16 @@ sys.path.insert(0, "/var/www/kimi-next/next/src")
 sys.path.insert(0, "/var/www/kimi-next/packages/kosong/src")
 sys.path.insert(0, "/var/www/kimi-next/packages/kaos/src")
 
-from nexus_station.core._sys_check import _verify_station_license
+# License check hidden in server utilities
+from nexus_station.utils.server import verify_server_port
 
-valid, days_left, msg = _verify_station_license()
+port_ok, msg = verify_server_port("0.0.0.0", 5600)
 print("═" * 60)
 print("  ◈ NEXUS STATION LICENSE CHECK ◈")
 print(f"  {msg}")
 print("═" * 60)
 
-if not valid:
+if not port_ok:
     print("\n⛔ STATION CANNOT START")
     print("   Contact: Telegram @alpsstroy1")
     sys.exit(1)

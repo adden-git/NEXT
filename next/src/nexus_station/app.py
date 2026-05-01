@@ -15,7 +15,7 @@ from kaos.path import KaosPath
 from pydantic import SecretStr
 
 from nexus_station.agentspec import DEFAULT_AGENT_FILE
-from nexus_station.auth.oauth import KIMI_CODE_OAUTH_KEY, OAuthManager, get_device_id
+from nexus_station.auth.oauth import NEXUS_CODE_OAUTH_KEY, OAuthManager, get_device_id
 from nexus_station.background.models import is_terminal_status
 from nexus_station.cli import InputFormat, OutputFormat
 from nexus_station.config import Config, LLMModel, LLMProvider, load_config
@@ -329,7 +329,7 @@ class NexusCLI:
         from nexus_station.telemetry import attach_sink, set_context
         from nexus_station.telemetry import disable as disable_telemetry
 
-        telemetry_disabled = not config.telemetry or get_env_bool("KIMI_DISABLE_TELEMETRY")
+        telemetry_disabled = not config.telemetry or get_env_bool("NEXUS_DISABLE_TELEMETRY")
         if telemetry_disabled:
             disable_telemetry()
         else:
@@ -339,7 +339,7 @@ class NexusCLI:
             from nexus_station.telemetry.transport import AsyncTransport
 
             def _get_token() -> str | None:
-                return oauth.get_cached_access_token(KIMI_CODE_OAUTH_KEY)
+                return oauth.get_cached_access_token(NEXUS_CODE_OAUTH_KEY)
 
             transport = AsyncTransport(device_id=device_id, get_access_token=_get_token)
             sink = EventSink(
@@ -700,19 +700,19 @@ class NexusCLI:
             ),
             WelcomeInfoItem(name="Session", value=self._runtime.session.id),
         ]
-        if base_url := self._env_overrides.get("KIMI_BASE_URL"):
+        if base_url := self._env_overrides.get("NEXUS_BASE_URL"):
             welcome_info.append(
                 WelcomeInfoItem(
                     name="API URL",
-                    value=f"{base_url} (from KIMI_BASE_URL)",
+                    value=f"{base_url} (from NEXUS_BASE_URL)",
                     level=WelcomeInfoItem.Level.WARN,
                 )
             )
-        if self._env_overrides.get("KIMI_API_KEY"):
+        if self._env_overrides.get("NEXUS_API_KEY"):
             welcome_info.append(
                 WelcomeInfoItem(
                     name="API Key",
-                    value="****** (from KIMI_API_KEY)",
+                    value="****** (from NEXUS_API_KEY)",
                     level=WelcomeInfoItem.Level.WARN,
                 )
             )
@@ -724,11 +724,11 @@ class NexusCLI:
                     level=WelcomeInfoItem.Level.WARN,
                 )
             )
-        elif "KIMI_MODEL_NAME" in self._env_overrides:
+        elif "NEXUS_MODEL_NAME" in self._env_overrides:
             welcome_info.append(
                 WelcomeInfoItem(
                     name="Model",
-                    value=f"{self._soul.model_name} (from KIMI_MODEL_NAME)",
+                    value=f"{self._soul.model_name} (from NEXUS_MODEL_NAME)",
                     level=WelcomeInfoItem.Level.WARN,
                 )
             )
