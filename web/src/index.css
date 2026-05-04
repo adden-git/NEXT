@@ -418,7 +418,7 @@ code, pre, .font-terminal, kbd, samp {
   *::before,
   *::after {
     box-sizing: border-box;
-    @apply border-border outline-ring/50;
+    @apply border-border;
   }
 
   /* Typography */
@@ -657,44 +657,34 @@ input[type="range"]::-moz-range-thumb {
 
 /* === NEXUS Station Animations === */
 
-/* Icon glow */
+/* Icon color only — no glow */
 .lucide {
   color: var(--primary);
-  filter: drop-shadow(0 0 2px var(--primary));
-  transition: filter 0.2s ease;
-}
-.lucide:hover {
-  filter: drop-shadow(0 0 6px var(--primary));
 }
 
-/* Button neon glow */
+/* Button hover — no glow */
 button, [role="button"] {
-  transition: all 0.2s ease;
-}
-button:hover, [role="button"]:hover {
-  box-shadow: 0 0 8px var(--primary);
+  transition: background-color 0.2s ease, color 0.2s ease, border-color 0.2s ease;
 }
 
-/* Card hover lift */
+/* Card hover — no glow */
 .card, [class*="card"] {
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition: transform 0.2s ease;
 }
 .card:hover, [class*="card"]:hover {
   transform: translateY(-1px);
-  box-shadow: 0 0 12px rgba(0, 240, 255, 0.1);
 }
 
-/* Input focus glow */
+/* Input focus — border only, no glow */
 input:focus, textarea:focus, select:focus {
   outline: none;
-  box-shadow: 0 0 8px var(--primary);
   border-color: var(--primary);
 }
 
-/* Sidebar item hover glow */
+/* Sidebar item hover — no glow */
 [class*="sidebar"] button:hover,
 [class*="sidebar"] a:hover {
-  text-shadow: 0 0 6px var(--primary);
+  opacity: 0.9;
 }
 
 /* Pulse animation for status indicators */
