@@ -731,6 +731,7 @@ async def update_session_model_params(
 class GuardianSettingsRequest(BaseModel):
     enabled: bool
     model: str | None = Field(default=None)
+    forbidden_files: list[str] = Field(default_factory=list)
 
 
 @router.get("/{session_id}/guardian", summary="Get guardian AI settings")
@@ -747,6 +748,7 @@ async def get_session_guardian(
     return {
         "enabled": state.guardian_enabled,
         "model": state.guardian_model,
+        "forbidden_files": state.forbidden_files,
     }
 
 
@@ -764,8 +766,9 @@ async def update_session_guardian(
     state = load_session_state(session_dir)
     state.guardian_enabled = request.enabled
     state.guardian_model = request.model
+    state.forbidden_files = request.forbidden_files
     save_session_state(state, session_dir)
-    return {"success": True, "enabled": state.guardian_enabled, "model": state.guardian_model}
+    return {"success": True, "enabled": state.guardian_enabled, "model": state.guardian_model, "forbidden_files": state.forbidden_files}
 
 
 @router.get("/{session_id}/instructions", summary="Get instruction files for session")

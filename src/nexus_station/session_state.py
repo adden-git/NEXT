@@ -56,6 +56,8 @@ class SessionState(BaseModel):
     # Guardian AI dual-check settings
     guardian_enabled: bool = Field(default=False)
     guardian_model: str | None = Field(default=None)
+    # Forbidden files/patterns — guardian will block any tool touching these
+    forbidden_files: list[str] = Field(default_factory=list)
 
 
 _LEGACY_METADATA_FILENAME = "metadata.json"

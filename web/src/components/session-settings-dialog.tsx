@@ -51,6 +51,7 @@ type GitDiffStats = {
 type GuardianSettings = {
   enabled: boolean;
   model: string | null;
+  forbidden_files: string[];
 };
 
 const DEFAULT_PARAMS = {
@@ -628,7 +629,7 @@ export function SessionSettingsDialog({ sessionId }: { sessionId: string }) {
   const [refactoring, setRefactoring] = useState(false);
   const [refactorResult, setRefactorResult] = useState<any>(null);
   const [gitDiff, setGitDiff] = useState<GitDiffStats | null>(null);
-  const [guardian, setGuardian] = useState<GuardianSettings>({ enabled: false, model: null });
+  const [guardian, setGuardian] = useState<GuardianSettings>({ enabled: false, model: null, forbidden_files: [] });
   const [guardianLoading, setGuardianLoading] = useState(false);
   const [guardianDirty, setGuardianDirty] = useState(false);
   const [configModels, setConfigModels] = useState<Record<string, { provider: string; model: string; display_name?: string }>>({});
@@ -708,7 +709,7 @@ export function SessionSettingsDialog({ sessionId }: { sessionId: string }) {
       ]);
       if (!gRes.ok) throw new Error(`HTTP ${gRes.status}`);
       const gData = await gRes.json();
-      setGuardian({ enabled: !!gData.enabled, model: gData.model || null });
+      setGuardian({ enabled: !!gData.enabled, model: gData.model || null, forbidden_files: gData.forbidden_files || [] });
       setGuardianDirty(false);
       if (mRes.ok) {
         const mData = await mRes.json();
@@ -726,7 +727,7 @@ export function SessionSettingsDialog({ sessionId }: { sessionId: string }) {
       const res = await fetch(`/api/sessions/${sessionId}/guardian`, {
         method: "PUT",
         headers: { "Content-Type": "application/json", ...getAuthHeader() },
-        body: JSON.stringify({ enabled: settings.enabled, model: settings.model }),
+        body: JSON.stringify({ enabled: settings.enabled, model: settings.model, forbidden_files: settings.forbidden_files }),
       });
       const data = await res.json();
       if (data.success) {

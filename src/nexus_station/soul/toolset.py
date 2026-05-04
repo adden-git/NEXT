@@ -186,6 +186,27 @@ class NexusToolset:
                                     brief="Guardian blocked",
                                 ),
                             )
+                        # Medium/high risk: ask user for confirmation before proceeding
+                        if guardian_result.risk in ("medium", "high"):
+                            approval_result = await self._runtime.approval.request(
+                                sender="Guardian AI",
+                                action=tool_call.function.name,
+                                description=(
+                                    f"⚠️ Guardian AI flagged this tool call as **{guardian_result.risk} risk**.\n\n"
+                                    f"Reason: {guardian_result.reason or 'No reason provided'}"
+                                ),
+                            )
+                            if not approval_result:
+                                return ToolResult(
+                                    tool_call_id=tool_call.id,
+                                    return_value=ToolError(
+                                        message=(
+                                            f"Tool call rejected by user after Guardian AI flagged it as "
+                                            f"{guardian_result.risk} risk."
+                                        ),
+                                        brief="Guardian: user rejected",
+                                    ),
+                                )
 
                 # --- PreToolUse ---
                 from nexus_station.hooks import events
