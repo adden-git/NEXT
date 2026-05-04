@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>NEXUS Station — Файлы</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<link rel="stylesheet" href="https://unpkg.com/@phosphor-icons/web@2.1.1/src/regular/style.css">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/javascript/javascript.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/xml/xml.min.js"></script>
@@ -220,23 +221,23 @@
     </a>
   </div>
   <select class="theme-select" id="themeSelect" onchange="changeTheme(this.value)" title="Тема">
-    <option value="nexus-light">☀️</option>
-    <option value="nexus-dark" selected>🌙</option>
-    <option value="neon">💠</option>
-    <option value="matrix">🟢</option>
-    <option value="molten">🔥</option>
+    <option value="nexus-light">☀️ Светлая</option>
+    <option value="nexus-dark" selected>🌙 Тёмная</option>
+    <option value="neon">💠 Неон</option>
+    <option value="matrix">🟢 Матрица</option>
+    <option value="molten">🔥 Плавленая</option>
   </select>
 </div>
 <div class="toolbar">
-  <button class="icon-btn" onclick="goUp()" title="Вверх">⬆️</button>
-  <button class="icon-btn" onclick="mkdir()" title="Новая папка">📁</button>
-  <button class="icon-btn" onclick="document.getElementById('fileInput').click()" title="Загрузить файл">📤</button>
+  <button class="icon-btn" onclick="goUp()" title="Вверх"><i class="ph ph-arrow-up"></i></button>
+  <button class="icon-btn" onclick="mkdir()" title="Новая папка"><i class="ph ph-folder"></i></button>
+  <button class="icon-btn" onclick="document.getElementById('fileInput').click()" title="Загрузить файл"><i class="ph ph-upload-simple"></i></button>
   <input type="file" id="fileInput" onchange="handleUpload(this.files[0])">
-  <button class="icon-btn" onclick="uploadPrompt()" title="Вставить текст">📝</button>
+  <button class="icon-btn" onclick="uploadPrompt()" title="Вставить текст"><i class="ph ph-file-text"></i></button>
 </div>
 <div class="pathbar">
   <input type="text" id="pathInput" value="/var/www" onkeydown="if(event.key==='Enter')loadList()">
-  <button class="icon-btn primary" onclick="loadList()" title="Перейти">➡️</button>
+  <button class="icon-btn primary" onclick="loadList()" title="Перейти"><i class="ph ph-arrow-right"></i></button>
 </div>
 <div class="table-wrap">
   <table>
@@ -250,8 +251,8 @@
     <h3 id="editorTitle">Редактирование</h3>
     <textarea id="editorText"></textarea>
     <div class="btns">
-      <button class="icon-btn" onclick="closeEditor()" title="Отмена">❌ Отмена</button>
-      <button class="icon-btn primary" onclick="saveEditor()" title="Сохранить">💾 Сохранить</button>
+      <button class="icon-btn" onclick="closeEditor()" title="Отмена"><i class="ph ph-x"></i> Отмена</button>
+      <button class="icon-btn primary" onclick="saveEditor()" title="Сохранить"><i class="ph ph-check"></i> Сохранить</button>
     </div>
   </div>
 </div>
@@ -320,9 +321,9 @@
         <td class="size hide-mobile">${isDir?'—':formatSize(item.size)}</td>
         <td class="mtime hide-mobile">${new Date(item.mtime*1000).toLocaleString('ru-RU')}</td>
         <td class="actions">
-          ${isDir?'':`<button class="icon-btn" onclick="downloadFile('${item.path}', '${item.name}')" title="Скачать">⬇️</button>`}
-          <button class="icon-btn" onclick="renameItem('${item.path}')" title="Переименовать">✏️</button>
-          <button class="icon-btn danger" onclick="deleteItem('${item.path}',${isDir})" title="Удалить">🗑️</button>
+          ${isDir?'':`<button class="icon-btn" onclick="downloadFile('${item.path}', '${item.name}')" title="Скачать"><i class="ph ph-download"></i></button>`}
+          <button class="icon-btn" onclick="renameItem('${item.path}')" title="Переименовать"><i class="ph ph-pencil-simple"></i></button>
+          <button class="icon-btn danger" onclick="deleteItem('${item.path}',${isDir})" title="Удалить"><i class="ph ph-trash"></i></button>
         </td>
       `;
       tbody.appendChild(tr);

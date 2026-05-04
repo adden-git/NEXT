@@ -175,6 +175,8 @@
     .btn { padding: 4px 8px; font-size: 11px; }
     .tabs { padding: 4px 6px; }
     .tab { padding: 6px 4px; font-size: 11px; }
+    .btn, .tab, .ctx-menu-item { user-select: none; -webkit-user-select: none; }
+    .ph { font-size: 1.15em; vertical-align: middle; line-height: 1; }
     #terminal-panel { padding: 4px; }
     #logs-panel { padding: 10px; font-size: 11px; }
     #status-panel { padding: 10px; }
@@ -223,7 +225,7 @@
 </script>
 <div class="header">
   <div class="header-left">
-    <a href="/" class="back-link">← NEXUS</a>
+    <a href="/" class="back-link"><i class="ph ph-arrow-left"></i> NEXUS</a>
     <span class="title">NEXUS — SSH Terminal</span>
   </div>
   <div class="header-right">
@@ -235,7 +237,7 @@
       <option value="molten">🔥 Плавленая</option>
     </select>
     <span class="status-dot" id="status-dot"></span>
-    <button class="btn primary" onclick="reconnect()" title="Переподключить">↻</button>
+    <button class="btn primary" onclick="reconnect()" title="Переподключить"><i class="ph ph-arrows-clockwise"></i></button>
   </div>
 </div>
 <div id="main">
@@ -250,16 +252,16 @@
   </div>
 </div>
 <div class="tabs">
-  <button class="tab active" onclick="switchTab('terminal', this)">🖥 Терминал</button>
-  <button class="tab" onclick="switchTab('logs', this)">📋 Логи <span class="tab-badge" id="log-badge" style="display:none">0</span></button>
-  <button class="tab" onclick="switchTab('status', this)">📊 Статус</button>
+  <button class="tab active" onclick="switchTab('terminal', this)"><i class="ph ph-monitor"></i> Терминал</button>
+  <button class="tab" onclick="switchTab('logs', this)"><i class="ph ph-scroll"></i> Логи <span class="tab-badge" id="log-badge" style="display:none">0</span></button>
+  <button class="tab" onclick="switchTab('status', this)"><i class="ph ph-chart-bar"></i> Статус</button>
 </div>
 
 <!-- Context menu -->
 <div class="ctx-menu" id="ctxMenu">
-  <div class="ctx-menu-item" onclick="ctxCopyAll()">📋 Копировать всё</div>
-  <div class="ctx-menu-item" onclick="ctxCopySelection()">📄 Копировать выделенное</div>
-  <div class="ctx-menu-item danger" onclick="ctxClear()">🗑 Очистить</div>
+  <div class="ctx-menu-item" onclick="ctxCopyAll()"><i class="ph ph-copy"></i> Копировать всё</div>
+  <div class="ctx-menu-item" onclick="ctxCopySelection()"><i class="ph ph-copy"></i> Копировать выделенное</div>
+  <div class="ctx-menu-item danger" onclick="ctxClear()"><i class="ph ph-trash"></i> Очистить</div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.min.js"></script>
