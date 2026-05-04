@@ -1,0 +1,43 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Node
+web/node_modules/
+node_modules/
+npm-debug.log*
+
+# Build / Dist
+web/dist/
+web/build/
+
+# Environment
+.env
+.env.local
+
+# Logs
+logs/
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Database
+auth_server.db
+*.db
+
+# Build artifacts
+src/nexus_station/web/static/assets/
+src/nexus_station/web/static/index.html
+
+# Misc
+*.tar.gz

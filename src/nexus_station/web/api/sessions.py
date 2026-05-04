@@ -1,0 +1,1870 @@
+"""Sessions API routes."""
+
+from __future__ import annotations
+
+import asyncio
+from collections import deque
+from datetime import UTC, datetime
+from nexus_station.web.utils._json import json
+import mimetypes
+import os
+import shutil
+import time
+from pathlib import Path
+from typing import Any, cast
+from urllib.parse import quote
+from uuid import UUID, uuid4
+
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, status
+from fastapi.responses import FileResponse, Response
+from kaos.path import KaosPath
+from pydantic import BaseModel, Field
+from starlette.websockets import WebSocket, WebSocketDisconnect
+
+from nexus_station import logger
+from nexus_station.metadata import load_metadata, save_metadata
+from nexus_station.session import Session as NexusCLISession
+from nexus_station.utils.subprocess_env import get_clean_env
+from nexus_station.web.auth import is_origin_allowed, is_private_ip, verify_token
+from nexus_station.web.models import (
+    GenerateTitleRequest,
+    GenerateTitleResponse,
+    GitDiffStats,
+    GitFileDiff,
+    Session,
+    SessionStatus,
+    UpdateSessionRequest,
+)
+from nexus_station.web.runner.messages import new_session_status_message, send_history_complete
+from nexus_station.web.runner.process import NexusCLIRunner
+from nexus_station.web.store.sessions import (
+    JointSession,
+    invalidate_sessions_cache,
+    load_session_by_id,
+    load_sessions_page,
+    run_auto_archive,
+)
+from nexus_station.wire.jsonrpc import (
+    ErrorCodes,
+    JSONRPCErrorObject,
+    JSONRPCErrorResponse,
+    JSONRPCInMessageAdapter,
+    JSONRPCPromptMessage,
+)
+from nexus_station.wire.serde import deserialize_wire_message
+from nexus_station.wire.types import is_request
+
+router = APIRouter(prefix="/api/sessions", tags=["sessions"])
+work_dirs_router = APIRouter(prefix="/api/work-dirs", tags=["work-dirs"])
+
+# Constants
+MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100MB
+MAX_REPLAY_WIRE_MESSAGES = 200  # Max wire events to replay on reconnect
+DEFAULT_MAX_PUBLIC_PATH_DEPTH = 6
+SENSITIVE_PATH_PARTS = {
+    "id_rsa",
+    "id_ed25519",
+    "known_hosts",
+    "credentials",
+    ".aws",
+    ".ssh",
+    ".gnupg",
+    ".kube",
+    ".npmrc",
+    ".pypirc",
+    ".netrc",
+}
+SENSITIVE_PATH_EXTENSIONS = {
+    ".pem",
+    ".key",
+    ".p12",
+    ".pfx",
+    ".kdbx",
+    ".der",
+}
+# Home directory patterns to detect if resolved path escapes to sensitive locations
+SENSITIVE_HOME_PATHS = {
+    ".ssh",
+    ".gnupg",
+    ".aws",
+    ".kube",
+}
+
+
+def sanitize_filename(filename: str) -> str:
+    """Remove potentially dangerous characters from filename."""
+    # Keep only alphanumeric, dots, underscores, hyphens, and spaces
+    safe = "".join(c for c in filename if c.isalnum() or c in "._- ")
+    return safe.strip() or "unnamed"
+
+
+def get_runner(req: Request) -> NexusCLIRunner:
+    """Get the NexusCLIRunner from the FastAPI app state."""
+    return req.app.state.runner
+
+
+def get_runner_ws(ws: WebSocket) -> NexusCLIRunner:
+    """Get the NexusCLIRunner from the FastAPI app state (for WebSocket routes)."""
+    return ws.app.state.runner
+
+
+def get_editable_session(
+    session_id: UUID,
+    runner: NexusCLIRunner,
+) -> JointSession:
+    """Get a session and verify it's not busy."""
+    session = load_session_by_id(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found",
+        )
+    # Check if session is busy
+    session_process = runner.get_session(session_id)
+    if session_process and session_process.is_busy:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Session is busy. Please wait for it to complete before modifying.",
+        )
+    return session
+
+
+def _relative_parts(path: Path) -> list[str]:
+    return [part for part in path.parts if part not in {"", "."}]
+
+
+def _is_sensitive_relative_path(rel_path: Path) -> bool:
+    parts = _relative_parts(rel_path)
+    for part in parts:
+        if part.startswith("."):
+            return True
+        if part.lower() in SENSITIVE_PATH_PARTS:
+            return True
+    return rel_path.suffix.lower() in SENSITIVE_PATH_EXTENSIONS
+
+
+def _contains_symlink(path: Path, base: Path) -> bool:
+    """Check if any component of the path (relative to base) is a symlink."""
+    try:
+        current = base
+        rel_parts = path.relative_to(base).parts
+        for part in rel_parts:
+            current = current / part
+            if current.is_symlink():
+                return True
+    except (ValueError, OSError):
+        return True
+    return False
+
+
+def _is_path_in_sensitive_location(path: Path) -> bool:
+    """Check if resolved path points to a sensitive location (e.g., ~/.ssh, ~/.aws)."""
+    try:
+        home = Path.home()
+        if path.is_relative_to(home):
+            rel_to_home = path.relative_to(home)
+            first_part = rel_to_home.parts[0] if rel_to_home.parts else ""
+            if first_part in SENSITIVE_HOME_PATHS:
+                return True
+    except (ValueError, RuntimeError):
+        pass
+    return False
+
+
+def _ensure_public_file_access_allowed(
+    rel_path: Path,
+    restrict_sensitive_apis: bool,
+    max_path_depth: int = DEFAULT_MAX_PUBLIC_PATH_DEPTH,
+) -> None:
+    if not restrict_sensitive_apis:
+        return
+    rel_parts = _relative_parts(rel_path)
+    if len(rel_parts) > max_path_depth:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Path too deep for public access "
+            f"(max depth: {max_path_depth}, current: {len(rel_parts)}).",
+        )
+    if _is_sensitive_relative_path(rel_path):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access to sensitive files is disabled.",
+        )
+
+
+def _read_wire_lines(
+    wire_file: Path, max_messages: int | None = None, offset: int = 0
+) -> tuple[list[str], int]:
+    """Read and parse wire.jsonl into JSONRPC event strings (runs in thread).
+
+    Args:
+        wire_file: Path to the wire.jsonl file.
+        max_messages: If set, limit the number of events returned.
+        offset: Number of events to skip from the start of the file.
+
+    Returns:
+        A tuple of (event_strings, total_message_count).
+    """
+    result: list[str] = []
+    total = 0
+    with open(wire_file, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+                if not isinstance(record, dict):
+                    continue
+                record = cast(dict[str, Any], record)
+                record_type = record.get("type")
+                if isinstance(record_type, str) and record_type == "metadata":
+                    continue
+                message_raw = record.get("message")
+                if not isinstance(message_raw, dict):
+                    continue
+                message_raw = cast(dict[str, Any], message_raw)
+                message = deserialize_wire_message(message_raw)
+                _is_req = is_request(message)
+                event_msg: dict[str, Any] = {
+                    "jsonrpc": "2.0",
+                    "method": "request" if _is_req else "event",
+                    "params": message_raw,
+                }
+                if _is_req:
+                    event_msg["id"] = message.id
+                total += 1
+                if total <= offset:
+                    continue
+                result.append(json.dumps(event_msg, ensure_ascii=False))
+                if max_messages and len(result) >= max_messages:
+                    # We still count total but stop collecting
+                    pass
+            except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+                continue
+    # If max_messages is set, return the *last* N events (most recent)
+    if max_messages and len(result) > max_messages:
+        result = result[-max_messages:]
+    return result, total
+
+
+async def replay_history(
+    ws: WebSocket, session_dir: Path, max_messages: int = MAX_REPLAY_WIRE_MESSAGES
+) -> None:
+    """Replay historical wire messages from wire.jsonl to a WebSocket.
+
+    Only the most recent ``max_messages`` events are replayed to avoid
+    overwhelming the client with huge histories.
+    """
+    wire_file = session_dir / "wire.jsonl"
+    if not await asyncio.to_thread(wire_file.exists):
+        return
+
+    try:
+        lines, total = await asyncio.to_thread(
+            _read_wire_lines, wire_file, max_messages=max_messages
+        )
+        if total > len(lines):
+            # Notify the client that history was truncated
+            trunc_notice = json.dumps(
+                {
+                    "jsonrpc": "2.0",
+                    "method": "event",
+                    "params": {
+                        "type": "history_truncated",
+                        "payload": {
+                            "total_messages": total,
+                            "shown_messages": len(lines),
+                            "skipped_messages": total - len(lines),
+                        },
+                    },
+                },
+                ensure_ascii=False,
+            )
+            await ws.send_text(trunc_notice)
+        for event_text in lines:
+            await ws.send_text(event_text)
+    except Exception:
+        pass
+
+
+@router.get("/", summary="List all sessions")
+async def list_sessions(
+    runner: NexusCLIRunner = Depends(get_runner),
+    limit: int = 100,
+    offset: int = 0,
+    q: str | None = None,
+    archived: bool | None = None,
+) -> list[Session]:
+    """List sessions with optional pagination and search.
+
+    Args:
+        limit: Maximum number of sessions to return (default 100, max 500).
+        offset: Number of sessions to skip (default 0).
+        q: Optional search query to filter by title or work_dir.
+        archived: Filter by archived status.
+            - None (default): Only return non-archived sessions.
+            - True: Only return archived sessions.
+    """
+    if limit <= 0:
+        limit = 100
+    if limit > 500:
+        limit = 500
+    if offset < 0:
+        offset = 0
+
+    # Run auto-archive in background (throttled internally, runs at most once per 5 minutes)
+    await asyncio.to_thread(run_auto_archive)
+
+    sessions = load_sessions_page(limit=limit, offset=offset, query=q, archived=archived)
+    for session in sessions:
+        session_process = runner.get_session(session.session_id)
+        session.is_running = session_process is not None and session_process.is_running
+        session.status = session_process.status if session_process else None
+    return cast(list[Session], sessions)
+
+
+@router.get("/{session_id}", summary="Get session")
+async def get_session(
+    session_id: UUID,
+    runner: NexusCLIRunner = Depends(get_runner),
+) -> Session | None:
+    """Get a session by ID."""
+    session = load_session_by_id(session_id)
+    if session is not None:
+        session_process = runner.get_session(session_id)
+        session.is_running = session_process is not None and session_process.is_running
+        session.status = session_process.status if session_process else None
+    return session
+
+
+@router.post("/", summary="Create a new session")
+async def create_session(request: CreateSessionRequest | None = None) -> Session:
+    """Create a new session."""
+    # Use provided work_dir or default to user's home directory
+    if request and request.work_dir:
+        work_dir_path = Path(request.work_dir).expanduser().resolve()
+        # Validate the directory exists
+        if not work_dir_path.exists():
+            if request.create_dir:
+                # Auto-create the directory
+                try:
+                    work_dir_path.mkdir(parents=True, exist_ok=True)
+                except PermissionError as e:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail=f"Permission denied: cannot create directory {request.work_dir}",
+                    ) from e
+                except OSError as e:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Failed to create directory: {e}",
+                    ) from e
+            else:
+                # Return 404 to indicate directory does not exist
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Directory does not exist: {request.work_dir}",
+                )
+        if not work_dir_path.is_dir():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Path is not a directory: {request.work_dir}",
+            )
+        work_dir = KaosPath.unsafe_from_local_path(work_dir_path)
+    else:
+        work_dir = KaosPath.unsafe_from_local_path(Path.home())
+    nexus_station_session = await NexusCLISession.create(work_dir=work_dir)
+    context_file = nexus_station_session.dir / "context.jsonl"
+    invalidate_sessions_cache()
+    invalidate_work_dirs_cache()
+    return Session(
+        session_id=UUID(nexus_station_session.id),
+        title=nexus_station_session.title,
+        last_updated=datetime.fromtimestamp(context_file.stat().st_mtime, tz=UTC),
+        is_running=False,
+        status=SessionStatus(
+            session_id=UUID(nexus_station_session.id),
+            state="stopped",
+            seq=0,
+            worker_id=None,
+            reason=None,
+            detail=None,
+            updated_at=datetime.now(UTC),
+        ),
+        work_dir=str(work_dir),
+        session_dir=str(nexus_station_session.dir),
+    )
+
+
+class CreateSessionRequest(BaseModel):
+    """Create session request."""
+
+    work_dir: str | None = None
+    create_dir: bool = False  # Whether to auto-create directory if it doesn't exist
+
+
+class ForkSessionRequest(BaseModel):
+    """Fork session request."""
+
+    turn_index: int = Field(..., ge=0)  # 0-based, fork includes this turn and all previous turns
+
+
+class UploadSessionFileResponse(BaseModel):
+    """Upload file response."""
+
+    path: str
+    filename: str
+    size: int
+
+
+@router.post("/{session_id}/files", summary="Upload file to session")
+async def upload_session_file(
+    session_id: UUID,
+    file: UploadFile,
+    runner: NexusCLIRunner = Depends(get_runner),
+) -> UploadSessionFileResponse:
+    """Upload a file to a session."""
+    session = get_editable_session(session_id, runner)
+    session_dir = session.nexus_station_session.dir
+    upload_dir = session_dir / "uploads"
+    upload_dir.mkdir(parents=True, exist_ok=True)
+
+    # Read and validate file size
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File too large (max {MAX_UPLOAD_SIZE // 1024 // 1024}MB)",
+        )
+
+    # Generate safe filename
+    file_name = str(uuid4())
+    if file.filename:
+        safe_name = sanitize_filename(file.filename)
+        name, ext = os.path.splitext(safe_name)
+        file_name = f"{name}_{file_name[:6]}{ext}"
+
+    upload_path = upload_dir / file_name
+    upload_path.write_bytes(content)
+
+    return UploadSessionFileResponse(
+        path=str(upload_path),
+        filename=file_name,
+        size=len(content),
+    )
+
+
+@router.get(
+    "/{session_id}/uploads/{path:path}",
+    summary="Get uploaded file from session uploads",
+)
+async def get_session_upload_file(
+    session_id: UUID,
+    path: str,
+) -> Response:
+    """Get a file from a session's uploads directory."""
+    session = load_session_by_id(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found",
+        )
+
+    uploads_dir = (session.nexus_station_session.dir / "uploads").resolve()
+    if not uploads_dir.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Uploads directory not found",
+        )
+
+    file_path = (uploads_dir / path).resolve()
+    if not file_path.is_relative_to(uploads_dir):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid path: path traversal not allowed",
+        )
+
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found",
+        )
+
+    media_type, _ = mimetypes.guess_type(file_path.name)
+    encoded_filename = quote(file_path.name, safe="")
+    return FileResponse(
+        file_path,
+        media_type=media_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": f"inline; filename*=UTF-8''{encoded_filename}",
+        },
+    )
+
+
+@router.get(
+    "/{session_id}/files/{path:path}",
+    summary="Get file or list directory from session work_dir",
+)
+async def get_session_file(
+    session_id: UUID,
+    path: str,
+    request: Request,
+) -> Response:
+    """Get a file or list directory from session work directory."""
+    session = load_session_by_id(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found",
+        )
+
+    # Security check: prevent path traversal attacks using resolve()
+    work_dir = Path(str(session.nexus_station_session.work_dir)).resolve()
+    requested_path = work_dir / path
+    file_path = requested_path.resolve()
+
+    # Check path traversal
+    if not file_path.is_relative_to(work_dir):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid path: path traversal not allowed",
+        )
+
+    rel_path = file_path.relative_to(work_dir)
+    restrict_sensitive_apis = getattr(request.app.state, "restrict_sensitive_apis", False)
+    max_path_depth = (
+        getattr(request.app.state, "max_public_path_depth", None) or DEFAULT_MAX_PUBLIC_PATH_DEPTH
+    )
+
+    # Additional security checks when restricting sensitive APIs
+    if restrict_sensitive_apis:
+        # Check for symlinks in the path
+        if _contains_symlink(requested_path, work_dir):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Symbolic links are not allowed in public mode.",
+            )
+
+        # Check if resolved path points to sensitive location
+        if _is_path_in_sensitive_location(file_path):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access to sensitive system directories is not allowed.",
+            )
+
+    _ensure_public_file_access_allowed(rel_path, restrict_sensitive_apis, max_path_depth)
+
+    if not file_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found",
+        )
+
+    if file_path.is_dir():
+        result: list[dict[str, str | int]] = []
+        for subpath in file_path.iterdir():
+            if restrict_sensitive_apis:
+                rel_subpath = rel_path / subpath.name
+                if _is_sensitive_relative_path(rel_subpath):
+                    continue
+            if subpath.is_dir():
+                result.append({"name": subpath.name, "type": "directory"})
+            else:
+                try:
+                    size = subpath.stat().st_size
+                except OSError:
+                    size = 0
+                result.append({"name": subpath.name, "type": "file", "size": size})
+        result.sort(key=lambda x: (cast(str, x["type"]), cast(str, x["name"])))
+        return Response(content=json.dumps(result), media_type="application/json")
+
+    content = file_path.read_bytes()
+    media_type, _ = mimetypes.guess_type(file_path.name)
+    encoded_filename = quote(file_path.name, safe="")
+    return Response(
+        content=content,
+        media_type=media_type or "application/octet-stream",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"},
+    )
+
+
+def _update_last_session_id(session: JointSession) -> None:
+    """Update last_session_id for the session's work directory."""
+    kimi_session = session.nexus_station_session
+    work_dir = kimi_session.work_dir
+
+    metadata = load_metadata()
+    work_dir_meta = metadata.get_work_dir_meta(work_dir)
+
+    if work_dir_meta is None:
+        work_dir_meta = metadata.new_work_dir_meta(work_dir)
+
+    work_dir_meta.last_session_id = kimi_session.id
+    save_metadata(metadata)
+
+
+@router.delete("/{session_id}", summary="Delete a session")
+async def delete_session(session_id: UUID, runner: NexusCLIRunner = Depends(get_runner)) -> None:
+    """Delete a session."""
+    session = get_editable_session(session_id, runner)
+    session_process = runner.get_session(session_id)
+    if session_process is not None:
+        await session_process.stop()
+    wd_meta = session.nexus_station_session.work_dir_meta
+    if wd_meta.last_session_id == str(session_id):
+        metadata = load_metadata()
+        for wd in metadata.work_dirs:
+            if wd.path == wd_meta.path:
+                wd.last_session_id = None
+                break
+        save_metadata(metadata)
+    session_dir = session.nexus_station_session.dir
+    if session_dir.exists():
+        shutil.rmtree(session_dir)
+    invalidate_sessions_cache()
+
+
+@router.patch("/{session_id}", summary="Update session")
+async def update_session(
+    session_id: UUID,
+    request: UpdateSessionRequest,
+    runner: NexusCLIRunner = Depends(get_runner),
+) -> Session:
+    """Update a session (e.g., rename title or archive/unarchive)."""
+    from nexus_station.session_state import load_session_state, save_session_state
+
+    session = get_editable_session(session_id, runner)
+    session_dir = session.nexus_station_session.dir
+    state = load_session_state(session_dir)
+
+    # Update title if provided
+    if request.title is not None:
+        state.custom_title = request.title
+        state.title_generated = True
+
+    # Update archived status if provided
+    if request.archived is not None:
+        state.archived = request.archived
+        if request.archived:
+            state.archived_at = time.time()
+            state.auto_archive_exempt = False
+        else:
+            state.archived_at = None
+            state.auto_archive_exempt = True
+
+    save_session_state(state, session_dir)
+
+    # Invalidate cache to force reload
+    invalidate_sessions_cache()
+
+    # Return updated session
+    updated_session = load_session_by_id(session_id)
+    if updated_session is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to reload session after update",
+        )
+    return updated_session
+
+
+class SessionModelParamsRequest(BaseModel):
+    """Update per-session model parameters request."""
+
+    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
+    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
+    max_tokens: int | None = Field(default=None, ge=1, le=200_000)
+    thinking_keep: str | None = Field(default=None)
+
+
+@router.get("/{session_id}/model-params", summary="Get per-session model parameters")
+async def get_session_model_params(
+    session_id: UUID,
+    runner: NexusCLIRunner = Depends(get_runner),
+) -> dict[str, Any]:
+    """Get per-session model parameters. Returns empty values if not set."""
+    from nexus_station.session_state import load_session_state
+
+    session = get_editable_session(session_id, runner)
+    session_dir = session.nexus_station_session.dir
+    state = load_session_state(session_dir)
+    params = state.model_params
+    return {
+        "temperature": params.temperature if params else None,
+        "top_p": params.top_p if params else None,
+        "max_tokens": params.max_tokens if params else None,
+        "thinking_keep": params.thinking_keep if params else None,
+    }
+
+
+@router.put("/{session_id}/model-params", summary="Update per-session model parameters")
+async def update_session_model_params(
+    session_id: UUID,
+    request: SessionModelParamsRequest,
+    runner: NexusCLIRunner = Depends(get_runner),
+) -> dict[str, Any]:
+    """Update per-session model parameters. These override global env vars for this session."""
+    from nexus_station.session_state import load_session_state, save_session_state
+
+    session = get_editable_session(session_id, runner)
+    session_dir = session.nexus_station_session.dir
+    state = load_session_state(session_dir)
+
+    from nexus_station.session_state import ModelParams
+    state.model_params = ModelParams(
+        temperature=request.temperature,
+        top_p=request.top_p,
+        max_tokens=request.max_tokens,
+        thinking_keep=request.thinking_keep,
+    )
+    save_session_state(state, session_dir)
+
+    return {
+        "success": True,
+        "temperature": request.temperature,
+        "top_p": request.top_p,
+        "max_tokens": request.max_tokens,
+        "thinking_keep": request.thinking_keep,
+    }
+
+
+class GuardianSettingsRequest(BaseModel):
+    enabled: bool
+    model: str | None = Field(default=None)
+
+
+@router.get("/{session_id}/guardian", summary="Get guardian AI settings")
+async def get_session_guardian(
+    session_id: UUID,
+    runner: NexusCLIRunner = Depends(get_runner),
+) -> dict[str, Any]:
+    """Get guardian AI dual-check settings for a session."""
+    from nexus_station.session_state import load_session_state
+
+    session = get_editable_session(session_id, runner)
+    session_dir = session.nexus_station_session.dir
+    state = load_session_state(session_dir)
+    return {
+        "enabled": state.guardian_enabled,
+        "model": state.guardian_model,
+    }
+
+
+@router.put("/{session_id}/guardian", summary="Update guardian AI settings")
+async def update_session_guardian(
+    session_id: UUID,
+    request: GuardianSettingsRequest,
+    runner: NexusCLIRunner = Depends(get_runner),
+) -> dict[str, Any]:
+    """Update guardian AI dual-check settings for a session."""
+    from nexus_station.session_state import load_session_state, save_session_state
+
+    session = get_editable_session(session_id, runner)
+    session_dir = session.nexus_station_session.dir
+    state = load_session_state(session_dir)
+    state.guardian_enabled = request.enabled
+    state.guardian_model = request.model
+    save_session_state(state, session_dir)
+    return {"success": True, "enabled": state.guardian_enabled, "model": state.guardian_model}
+
+
+@router.get("/{session_id}/instructions", summary="Get instruction files for session")
+async def get_session_instructions(
+    session_id: UUID,
+    runner: NexusCLIRunner = Depends(get_runner),
+) -> dict[str, Any]:
+    """Discover AGENTS.md, skills, and other instruction files for a session.
+
+    Returns files with `auto_loaded` flag indicating whether Kimi CLI
+    picks them up automatically.
+    """
+    from nexus_station.utils.path import find_project_root
+
+    session = load_session_by_id(session_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    work_dir = Path(str(session.nexus_station_session.work_dir)).resolve()
+    from kaos.path import KaosPath
+    work_dir_kaos = KaosPath.unsafe_from_local_path(work_dir)
+    project_root_kaos = await find_project_root(work_dir_kaos)
+    project_root = Path(str(project_root_kaos))
+
+    files: list[dict[str, Any]] = []
+
+    def _is_skill_path(path: Path) -> bool:
+        """Check if path is inside a skills directory."""
+        parts = [p.lower() for p in path.relative_to(work_dir).parts]
+        return (".nexus" in parts or ".agents" in parts or ".claude" in parts or ".codex" in parts) and "skills" in parts
+
+    def _is_agents_md(path: Path) -> bool:
+        """Check if file is an AGENTS.md (auto-discovered by Kimi CLI)."""
+        name = path.name.lower()
+        if name != "agents.md":
+            return False
+        # Direct AGENTS.md in any directory along the path
+        rel_parts = [p.lower() for p in path.relative_to(work_dir).parts]
+        # If it's directly in work_dir or parent dirs — auto_loaded
+        # If it's inside .nexus/ or .agents/ — also auto_loaded
+        return len(rel_parts) <= 2 or ".nexus" in rel_parts or ".agents" in rel_parts
+
+    def _is_builtin(path: Path) -> bool:
+        """Check if file is a builtin Kimi CLI skill (not project-specific)."""
+        try:
+            rel = path.relative_to(work_dir)
+            parts = [p.lower() for p in rel.parts]
+            # Builtin skills are those in .agents/skills/ or .nexus/skills/
+            # that live inside the Kimi CLI repo itself (work_dir == project_root)
+            if work_dir.resolve() == project_root.resolve():
+                return "skills" in parts and (".agents" in parts or ".nexus" in parts or ".claude" in parts or ".codex" in parts)
+        except ValueError:
+            pass
+        return False
+
+    def classify(path: Path) -> tuple[str, bool, bool]:
+        """Classify file and return (type, auto_loaded, is_builtin)."""
+        rel_parts = [p.lower() for p in path.relative_to(work_dir).parts]
+        is_blt = _is_builtin(path)
+
+        # AGENTS.md files — auto_loaded
+        if _is_agents_md(path):
+            return ("agents", True, is_blt)
+
+        # Skills inside .nexus/skills/ or .agents/skills/ — auto_loaded
+        if _is_skill_path(path) and path.name.lower() == "skill.md":
+            return ("skill", True, is_blt)
+
+        # Legacy / manual files
+        if ".nexus" in rel_parts or ".agents" in rel_parts:
+            if "prompts" in rel_parts:
+                return ("prompt", False, is_blt)
+            if "hooks" in rel_parts:
+                return ("hook", False, is_blt)
+            if "agents" in rel_parts:
+                return ("agent", False, is_blt)
+            if "plugins" in rel_parts:
+                return ("plugin", False, is_blt)
+
+        if path.name.lower().endswith(".skill.md"):
+            return ("skill", False, is_blt)
+        if path.name.lower().endswith(".prompt.md"):
+            return ("prompt", False, is_blt)
+
+        return ("instruction", False, is_blt)
+
+    # 1. AGENTS.md / agents.md along path from work_dir up to project_root
+    try:
+        current = work_dir
+        while True:
+            for name in ("AGENTS.md", "agents.md"):
+                candidate = current / name
+                if candidate.is_file():
+                    rel = candidate.relative_to(work_dir)
+                    ftype, auto, is_blt = classify(candidate)
+                    files.append({
+                        "path": str(rel),
+                        "full_path": str(candidate),
+                        "type": ftype,
+                        "name": name,
+                        "auto_loaded": auto,
+                        "is_builtin": is_blt,
+                    })
+            for dotdir in (".nexus", ".agents"):
+                agents = current / dotdir / "AGENTS.md"
+                if agents.is_file():
+                    rel = agents.relative_to(work_dir)
+                    ftype, auto, is_blt = classify(agents)
+                    files.append({
+                        "path": str(rel),
+                        "full_path": str(agents),
+                        "type": ftype,
+                        "name": f"{dotdir}/AGENTS.md",
+                        "auto_loaded": auto,
+                        "is_builtin": is_blt,
+                    })
+            if current.resolve() == project_root.resolve():
+                break
+            parent = current.parent
+            if parent == current:
+                break
+            current = parent
+    except Exception:
+        pass
+
+    # 2. Explicitly scan .nexus/skills/ and .agents/skills/ for SKILL.md
+    for subdir_name in (".nexus", ".agents", ".claude", ".codex"):
+        skills_dir = work_dir / subdir_name / "skills"
+        if not skills_dir.is_dir():
+            continue
+        for skill_root in skills_dir.iterdir():
+            if not skill_root.is_dir():
+                continue
+            skill_md = skill_root / "SKILL.md"
+            if skill_md.is_file():
+                rel = skill_md.relative_to(work_dir)
+                ftype, auto, is_blt = classify(skill_md)
+                files.append({
+                    "path": str(rel),
+                    "full_path": str(skill_md),
+                    "type": ftype,
+                    "name": "SKILL.md",
+                    "auto_loaded": auto,
+                    "is_builtin": is_blt,
+                })
+
+    # 3. .nexus/ and .agents/ other subdirectories under work_dir
+    for subdir_name in (".nexus", ".agents"):
+        subdir = work_dir / subdir_name
+        if not subdir.is_dir():
+            continue
+        for root, _dirs, filenames in os.walk(subdir):
+            for fname in filenames:
+                if not fname.lower().endswith(".md"):
+                    continue
+                fpath = Path(root) / fname
+                try:
+                    rel = fpath.relative_to(work_dir)
+                except ValueError:
+                    continue
+                # Skip already found AGENTS.md and SKILL.md
+                if fname.lower() == "agents.md":
+                    continue
+                if fname.lower() == "skill.md" and _is_skill_path(fpath):
+                    continue
+                ftype, auto, is_blt = classify(fpath)
+                files.append({
+                    "path": str(rel),
+                    "full_path": str(fpath),
+                    "type": ftype,
+                    "name": fname,
+                    "auto_loaded": auto,
+                    "is_builtin": is_blt,
+                })
+
+    # Deduplicate by full_path
+    seen: set[str] = set()
+    unique_files: list[dict[str, Any]] = []
+    for f in files:
+        fp = f["full_path"]
+        if fp not in seen:
+            seen.add(fp)
+            unique_files.append(f)
+
+    # Sort: auto_loaded first, then by type, then by path
+    type_order = {"agents": 0, "skill": 1, "agent": 2, "prompt": 3, "hook": 4, "plugin": 5, "instruction": 6}
+    unique_files.sort(key=lambda x: (
+        0 if x.get("auto_loaded") else 1,
+        type_order.get(x["type"], 99),
+        x["path"],
+    ))
+
+    return {
+        "work_dir": str(work_dir),
+        "project_root": str(project_root),
+        "files": unique_files,
+    }
+
+
+class CreateInstructionRequest(BaseModel):
+    """Create a template instruction file."""
+
+    type: str = Field(..., description="Type: agents, skill, hook, prompt, agent")
+    name: str | None = Field(default=None, description="File name for skill/hook/prompt/agent")
+
+
+@router.post("/{session_id}/create-instruction", summary="Create a template instruction file")
+async def create_instruction_file(
+    session_id: UUID,
+    request: CreateInstructionRequest,
+    runner: NexusCLIRunner = Depends(get_runner),
+) -> dict[str, Any]:
+    """Create a template AGENTS.md, SKILL.md, hook, prompt or agent file in the session's work_dir."""
+    session = load_session_by_id(session_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    work_dir = Path(str(session.nexus_station_session.work_dir)).resolve()
+
+    templates: dict[str, tuple[Path, str]] = {
+        "agents": (work_dir / "AGENTS.md", """# AGENTS.md — Правила для AI
+
+> Проект: {project}
+> Обновлено: {date}
+
+## Общие правила
+
+1. Весь код пиши на русском языке (комментарии, названия переменных)
+2. Не используй `sleep`, `watch`, бесконечные циклы в shell-командах
+3. Всегда делай бэкап перед изменением важных файлов
+4. Для логов: `tail -N файл`, никогда `sleep && tail`
+
+## Защищённые файлы
+
+- Не изменяй без разрешения: `ecosystem.config.js`, `db.js`, `app.js`, `.env`
+
+## Стиль кода
+
+- EJS: `<%= %>` для пользовательских данных, `<%- %>` только для доверенного HTML
+- CSRF: формы — поле `_csrf`, AJAX — заголовок `X-CSRF-Token`
+- Весь текст интерфейса — на русском
+"""),
+        "skill": (work_dir / ".nexus" / "skills" / (request.name or "my-skill") / "SKILL.md", """---
+name: {name}
+description: Описание навыка
+---
+
+## {name}
+
+Когда использовать этот навык:
+
+1. Условие 1
+2. Условие 2
+
+### Пошаговые инструкции
+
+1. Шаг 1
+2. Шаг 2
+3. Шаг 3
+
+### Примеры
+
+```
+Пример кода или вывода
+```
+"""),
+        "hook": (work_dir / ".nexus" / "hooks" / (request.name or "my-hook.sh"), """#!/bin/bash
+# .nexus/hooks/{name}
+# Hook для автоматизации
+
+read JSON
+# echo "$JSON" | jq -r '.tool_name'
+
+# Выход 0 = разрешить, 2 = заблокировать
+exit 0
+"""),
+        "prompt": (work_dir / ".nexus" / "prompts" / (request.name or "my-prompt.prompt.md"), """# {name}
+
+## Контекст
+
+Опишите контекст использования этого промпта.
+
+## Инструкции
+
+1. Инструкция 1
+2. Инструкция 2
+
+## Ожидаемый результат
+
+Что должно получиться в результате.
+"""),
+        "agent": (work_dir / ".nexus" / "agents" / (request.name or "my-agent.agent.md"), """# {name}
+
+## Роль
+
+Опишите роль этого агента.
+
+## Возможности
+
+- Возможность 1
+- Возможность 2
+
+## Ограничения
+
+- Не делай X
+- Всегда делай Y
+"""),
+    }
+
+    if request.type not in templates:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unknown type: {request.type}. Supported: {', '.join(templates.keys())}",
+        )
+
+    dest_path, template = templates[request.type]
+    dest_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if dest_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"File already exists: {dest_path}",
+        )
+
+    content = template.format(
+        project=work_dir.name,
+        date=datetime.now(UTC).strftime("%Y-%m-%d"),
+        name=request.name or "my-template",
+    )
+    dest_path.write_text(content, encoding="utf-8")
+
+    return {
+        "success": True,
+        "path": str(dest_path.relative_to(work_dir)),
+        "full_path": str(dest_path),
+        "type": request.type,
+    }
+
+
+@router.post("/{session_id}/refactor-instructions", summary="Analyze and refactor instruction files")
+async def refactor_session_instructions(
+    session_id: UUID,
+    runner: NexusCLIRunner = Depends(get_runner),
+) -> dict[str, Any]:
+    """Analyze instruction files and suggest optimizations."""
+    from nexus_station.utils.path import find_project_root
+
+    session = load_session_by_id(session_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+
+    work_dir = Path(str(session.nexus_station_session.work_dir)).resolve()
+    from kaos.path import KaosPath
+    work_dir_kaos = KaosPath.unsafe_from_local_path(work_dir)
+    project_root_kaos = await find_project_root(work_dir_kaos)
+    project_root = Path(str(project_root_kaos))
+
+    recommendations: list[dict[str, str]] = []
+    optimized_files: list[dict[str, Any]] = []
+    total_size = 0
+    agents_md_size = 0
+
+    # Collect instruction files (same logic as /instructions)
+    all_files: list[Path] = []
+    try:
+        current = work_dir
+        while True:
+            for name in ("AGENTS.md", "agents.md"):
+                candidate = current / name
+                if candidate.is_file():
+                    all_files.append(candidate)
+            for dotdir in (".nexus", ".agents"):
+                agents = current / dotdir / "AGENTS.md"
+                if agents.is_file():
+                    all_files.append(agents)
+            if current.resolve() == project_root.resolve():
+                break
+            parent = current.parent
+            if parent == current:
+                break
+            current = parent
+    except Exception:
+        pass
+
+    for subdir_name in (".nexus", ".agents"):
+        subdir = work_dir / subdir_name
+        if not subdir.is_dir():
+            continue
+        for root, _dirs, filenames in os.walk(subdir):
+            for fname in filenames:
+                if fname.lower().endswith(".md"):
+                    all_files.append(Path(root) / fname)
+
+    # Deduplicate
+    seen: set[str] = set()
+    unique_files: list[Path] = []
+    for f in all_files:
+        fp = str(f.resolve())
+        if fp not in seen:
+            seen.add(fp)
+            unique_files.append(f)
+
+    # Analyze each file
+    for fpath in unique_files:
+        try:
+            content = fpath.read_text(encoding="utf-8")
+            size = len(content.encode("utf-8"))
+            total_size += size
+
+            is_agents = fpath.name.lower() == "agents.md"
+            if is_agents:
+                agents_md_size += size
+
+            recs: list[str] = []
+            if size > 32 * 1024 and is_agents:
+                recs.append(f"Файл превышает лимит 32 KB — Kimi CLI обрежет его. Разбейте на части или перенесите в .nexus/skills/")
+            if size > 100 * 1024:
+                recs.append(f"Очень большой файл ({size // 1024} KB). Рассмотрите разделение на модули.")
+            if content.count("#") > 50:
+                recs.append("Много заголовков — возможно, файл слишком раздут. Объедините похожие секции.")
+            if len([l for l in content.splitlines() if l.strip()]) < 10 and size > 500:
+                recs.append("Мало содержательных строк — возможно, много пустых строк или комментариев.")
+
+            if recs:
+                try:
+                    rel = fpath.relative_to(work_dir)
+                except ValueError:
+                    rel = fpath.name
+                recommendations.append({
+                    "file": str(rel),
+                    "message": "; ".join(recs),
+                })
+        except Exception:
+            pass
+
+    # General recommendations
+    if agents_md_size == 0:
+        recommendations.insert(0, {
+            "file": "Общее",
+            "message": "AGENTS.md не найден. Создайте его для задания правил поведения Kimi в этом проекте.",
+        })
+
+    if total_size > 100 * 1024:
+        recommendations.insert(0, {
+            "file": "Общее",
+            "message": f"Общий размер инструкций {total_size // 1024} KB. Большие инструкции замедляют старт сессии. Перенесите редкоиспользуемое в skills.",
+        })
+
+    summary_parts: list[str] = []
+    summary_parts.append(f"Найдено файлов: {len(unique_files)}")
+    summary_parts.append(f"Общий размер: {total_size // 1024} KB")
+    if agents_md_size > 0:
+        summary_parts.append(f"AGENTS.md: {agents_md_size // 1024} KB")
+    if len(recommendations) == 0:
+        summary_parts.append("Всё выглядит оптимально ✓")
+    else:
+        summary_parts.append(f"Рекомендаций: {len(recommendations)}")
+
+    return {
+        "success": True,
+        "summary": ". ".join(summary_parts),
+        "total_files": len(unique_files),
+        "total_size": total_size,
+        "agents_md_size": agents_md_size,
+        "recommendations": recommendations,
+        "optimized_files": optimized_files,
+    }
+
+
+def extract_first_turn_from_wire(session_dir: Path) -> tuple[str, str] | None:
+    """Extract the first turn's user message and assistant response from wire.jsonl.
+
+    Returns:
+        tuple[str, str] | None: (user_message, assistant_response) or None if not found
+    """
+    wire_file = session_dir / "wire.jsonl"
+    if not wire_file.exists():
+        return None
+
+    user_message: str | None = None
+    assistant_response_parts: list[str] = []
+    in_first_turn = False
+
+    try:
+        with open(wire_file, encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    record = json.loads(line)
+                    message = record.get("message", {})
+                    msg_type = message.get("type")
+
+                    if msg_type == "TurnBegin":
+                        if in_first_turn:
+                            # Second turn started, stop
+                            break
+                        in_first_turn = True
+                        user_input = message.get("payload", {}).get("user_input")
+                        if user_input:
+                            from kosong.message import Message
+
+                            msg = Message(role="user", content=user_input)
+                            user_message = msg.extract_text(" ")
+
+                    elif msg_type == "ContentPart" and in_first_turn:
+                        payload = message.get("payload", {})
+                        if payload.get("type") == "text" and payload.get("text"):
+                            assistant_response_parts.append(payload["text"])
+
+                    elif msg_type == "TurnEnd" and in_first_turn:
+                        break
+
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        return None
+
+    if user_message and assistant_response_parts:
+        return (user_message, "".join(assistant_response_parts))
+    return None
+
+
+@router.post("/{session_id}/fork", summary="Fork a session at a specific turn")
+async def fork_session_endpoint(
+    session_id: UUID,
+    request: ForkSessionRequest,
+    runner: NexusCLIRunner = Depends(get_runner),
+) -> Session:
+    """Fork a session, creating a new session with history up to the specified turn.
+
+    The new session shares the same work_dir as the original session.
+    """
+    from nexus_station.session_fork import fork_session as do_fork
+
+    source_session = get_editable_session(session_id, runner)
+    source_dir = source_session.nexus_station_session.dir
+    work_dir = source_session.nexus_station_session.work_dir
+
+    source_title = source_session.title
+
+    try:
+        new_session_id = await do_fork(
+            source_session_dir=source_dir,
+            work_dir=work_dir,
+            turn_index=request.turn_index,
+            title_prefix="Fork",
+            source_title=source_title,
+        )
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        ) from e
+
+    invalidate_sessions_cache()
+    invalidate_work_dirs_cache()
+
+    from nexus_station.metadata import load_metadata
+    from nexus_station.session_state import load_session_state
+
+    metadata = load_metadata()
+    work_dir_meta = metadata.get_work_dir_meta(work_dir)
+    assert work_dir_meta is not None
+    new_session_dir = work_dir_meta.sessions_dir / new_session_id
+    new_state = load_session_state(new_session_dir)
+    fork_title = new_state.custom_title or f"Fork: {source_title}"
+
+    context_file = new_session_dir / "context.jsonl"
+    return Session(
+        session_id=UUID(new_session_id),
+        title=fork_title,
+        last_updated=datetime.fromtimestamp(context_file.stat().st_mtime, tz=UTC),
+        is_running=False,
+        status=SessionStatus(
+            session_id=UUID(new_session_id),
+            state="stopped",
+            seq=0,
+            worker_id=None,
+            reason=None,
+            detail=None,
+            updated_at=datetime.now(UTC),
+        ),
+        work_dir=str(work_dir),
+        session_dir=str(new_session_dir),
+    )
+
+
+@router.post("/{session_id}/generate-title", summary="Generate session title using AI")
+async def generate_session_title(
+    session_id: UUID,
+    request: GenerateTitleRequest | None = None,
+    runner: NexusCLIRunner = Depends(get_runner),
+) -> GenerateTitleResponse:
+    """Generate a concise session title using AI based on the first conversation turn.
+
+    If request body is empty or parameters are missing, the backend will
+    automatically read the first turn from wire.jsonl.
+    """
+    session = get_editable_session(session_id, runner)
+    session_dir = session.nexus_station_session.dir
+
+    from nexus_station.session_state import load_session_state, save_session_state
+
+    state = load_session_state(session_dir)
+
+    # Check if title was already generated (avoid duplicate calls)
+    if state.title_generated:
+        return GenerateTitleResponse(title=state.custom_title or "Untitled")
+
+    # Get message content: prefer request parameters, otherwise read from wire.jsonl
+    user_message = request.user_message if request else None
+    assistant_response = request.assistant_response if request else None
+
+    if not user_message or not assistant_response:
+        first_turn = extract_first_turn_from_wire(session_dir)
+        if first_turn:
+            user_message, assistant_response = first_turn
+
+    # If still no user message, return default title
+    if not user_message:
+        return GenerateTitleResponse(title="Untitled")
+
+    from nexus_station.utils.string import shorten
+
+    user_text = user_message.strip()
+    user_text = " ".join(user_text.split())
+    fallback_title = shorten(user_text, width=50) or "Untitled"
+
+    # If AI generation failed too many times, use fallback and mark as generated
+    if state.title_generate_attempts >= 3:
+        fresh = load_session_state(session_dir)
+        # Respect a title finalized by another request/user action while we
+        # were preparing a fallback.
+        if fresh.title_generated:
+            invalidate_sessions_cache()
+            return GenerateTitleResponse(title=fresh.custom_title or "Untitled")
+        fresh.custom_title = fallback_title
+        fresh.title_generated = True
+        save_session_state(fresh, session_dir)
+        invalidate_sessions_cache()
+        return GenerateTitleResponse(title=fallback_title)
+
+    # Try to generate title using AI
+    title = fallback_title
+    ai_generated = False
+    try:
+        from kosong import generate
+        from kosong.message import Message
+
+        from nexus_station.auth.oauth import OAuthManager
+        from nexus_station.config import load_config
+        from nexus_station.llm import create_llm
+
+        config = load_config()
+        model_name = config.default_model
+
+        if model_name and model_name in config.models:
+            model_config = config.models[model_name]
+            provider_config = config.providers.get(model_config.provider)
+
+            if provider_config:
+                oauth = OAuthManager(config)
+                await oauth.ensure_fresh()
+                llm = create_llm(provider_config, model_config, oauth=oauth)
+
+                if llm:
+                    system_prompt = (
+                        "Generate a concise session title (max 50 characters) "
+                        "based on the conversation. "
+                        "Only respond with the title text, nothing else. "
+                        "No quotes, no explanation."
+                    )
+
+                    prompt = f"""User: {user_message[:300]}
+Assistant: {(assistant_response or "")[:300]}
+
+Title:"""
+
+                    result = await generate(
+                        chat_provider=llm.chat_provider,
+                        system_prompt=system_prompt,
+                        tools=[],
+                        history=[Message(role="user", content=prompt)],
+                    )
+
+                    generated_title = result.message.extract_text().strip()
+                    # Remove quotes if present
+                    generated_title = generated_title.strip("\"'")
+
+                    if generated_title and len(generated_title) <= 50:
+                        title = generated_title
+                        ai_generated = True
+                    elif generated_title:
+                        title = shorten(generated_title, width=50)
+                        ai_generated = True
+
+    except Exception as e:
+        logger.warning(f"Failed to generate title using AI: {e}")
+        # Keep fallback_title, ai_generated stays False
+
+    # Read-modify-write: reload fresh state to avoid overwriting
+    # worker changes made during the LLM call
+    fresh = load_session_state(session_dir)
+    # Another request or manual rename may have finalized the title while the
+    # LLM call was in flight. Preserve that newer title instead of clobbering it.
+    if fresh.title_generated:
+        invalidate_sessions_cache()
+        return GenerateTitleResponse(title=fresh.custom_title or "Untitled")
+    fresh.custom_title = title
+    if ai_generated:
+        fresh.title_generated = True
+    else:
+        fresh.title_generate_attempts = fresh.title_generate_attempts + 1
+    save_session_state(fresh, session_dir)
+
+    # Invalidate cache
+    invalidate_sessions_cache()
+
+    return GenerateTitleResponse(title=title)
+
+
+@router.websocket("/{session_id}/stream")
+async def session_stream(
+    session_id: UUID,
+    websocket: WebSocket,
+    runner: NexusCLIRunner = Depends(get_runner_ws),
+) -> None:
+    """WebSocket stream for a session.
+
+    Flow:
+    1. Accept the WebSocket connection
+    2. If history exists, attach WebSocket in replay mode
+    3. Replay history messages from wire.jsonl
+    4. Start worker if needed
+    5. Flush buffered live messages and send status snapshot
+    6. Forward incoming messages to the subprocess
+    7. Clean up on disconnect
+    """
+    expected_token = getattr(websocket.app.state, "session_token", None)
+    enforce_origin = getattr(websocket.app.state, "enforce_origin", False)
+    allowed_origins = getattr(websocket.app.state, "allowed_origins", [])
+    lan_only = getattr(websocket.app.state, "lan_only", False)
+
+    # LAN-only check
+    if lan_only:
+        client_ip = websocket.client.host if websocket.client else None
+        if client_ip and not is_private_ip(client_ip):
+            await websocket.close(code=4403, reason="Access denied: LAN only")
+            return
+
+    if enforce_origin:
+        origin = websocket.headers.get("origin")
+        if origin and not is_origin_allowed(origin, allowed_origins):
+            await websocket.close(code=4403, reason="Origin not allowed")
+            return
+
+    if expected_token:
+        token = websocket.query_params.get("token")
+        if not verify_token(token, expected_token):
+            await websocket.close(code=4401, reason="Auth required")
+            return
+
+    await websocket.accept()
+
+    # Check if session exists
+    session = await asyncio.to_thread(load_session_by_id, session_id)
+    if session is None:
+        await websocket.close(code=4004, reason="Session not found")
+        return
+
+    # Check if session has history
+    session_dir = session.nexus_station_session.dir
+    wire_file = session_dir / "wire.jsonl"
+    has_history = await asyncio.to_thread(wire_file.exists)
+
+    session_process = await runner.get_or_create_session(session_id)
+    attached = False
+    try:
+        if has_history:
+            # Attach WebSocket in replay mode before history replay
+            await session_process.add_websocket_and_begin_replay(websocket)
+            attached = True
+
+            # Replay history
+            try:
+                await replay_history(websocket, session_dir)
+            except Exception as e:
+                logger.warning(f"Failed to replay history: {e}")
+
+        # Check if WebSocket is still connected before continuing
+        if not await send_history_complete(websocket):
+            logger.debug("WebSocket disconnected during history replay")
+            return
+
+        # Start session environment – if anything fails here, send an error
+        # status so the client doesn't hang on "Connecting to environment...".
+        try:
+            # Ensure work_dir exists
+            work_dir = Path(str(session.nexus_station_session.work_dir))
+            await asyncio.to_thread(lambda: work_dir.mkdir(parents=True, exist_ok=True))
+
+            if not attached:
+                # No history: attach and start worker
+                session_process = await runner.get_or_create_session(session_id)
+                await session_process.add_websocket_and_begin_replay(websocket)
+                attached = True
+
+            assert session_process is not None
+            # End replay and start worker
+            await session_process.end_replay(websocket)
+            await session_process.start()
+            await session_process.send_status_snapshot(websocket)
+        except Exception as e:
+            logger.warning(f"Failed to start session environment: {e}")
+            try:
+                error_status = SessionStatus(
+                    session_id=session_id,
+                    state="error",
+                    seq=0,
+                    worker_id=None,
+                    reason="initialization_failed",
+                    detail=str(e),
+                    updated_at=datetime.now(UTC),
+                )
+                await websocket.send_text(
+                    new_session_status_message(error_status).model_dump_json()
+                )
+            except Exception:
+                pass
+            return
+
+        # Track whether we've updated last_session_id for this connection.
+        # We defer the update until the first prompt message is actually forwarded,
+        # so that merely opening/viewing a session does not change last_session_id.
+        last_session_id_updated = False
+
+        # Forward incoming messages to the subprocess
+        while True:
+            try:
+                message = await websocket.receive_text()
+                # Reject new prompts when session is busy
+                if session_process.is_busy:
+                    try:
+                        in_message = JSONRPCInMessageAdapter.validate_json(message)
+                    except ValueError:
+                        in_message = None
+                    if isinstance(in_message, JSONRPCPromptMessage):
+                        # If the session is in error state, the in-flight IDs
+                        # are stale from a failed prompt.  Clear them so the
+                        # user can recover by sending a new message.
+                        if session_process.status.state == "error":
+                            logger.info(
+                                "Clearing stale in-flight prompts for "
+                                f"session {session_id} (was in error state)"
+                            )
+                            session_process.clear_in_flight()
+                        else:
+                            await websocket.send_text(
+                                JSONRPCErrorResponse(
+                                    id=in_message.id,
+                                    error=JSONRPCErrorObject(
+                                        code=ErrorCodes.INVALID_STATE,
+                                        message=(
+                                            "Session is busy; wait for completion before sending "
+                                            "a new prompt."
+                                        ),
+                                    ),
+                                ).model_dump_json()
+                            )
+                            continue
+
+                # Update last_session_id on first successful prompt
+                if not last_session_id_updated:
+                    try:
+                        in_message = JSONRPCInMessageAdapter.validate_json(message)
+                    except ValueError:
+                        in_message = None
+                    if isinstance(in_message, JSONRPCPromptMessage):
+                        await asyncio.to_thread(_update_last_session_id, session)
+                        last_session_id_updated = True
+
+                logger.debug(f"sending message to session {session_id}")
+                await session_process.send_message(message)
+            except WebSocketDisconnect:
+                logger.debug("WebSocket disconnected")
+                break
+            except Exception as e:
+                logger.warning(f"WebSocket error: {e.__class__.__name__} {e}")
+                break
+    finally:
+        if attached and session_process:
+            await session_process.remove_websocket(websocket)
+
+
+# Work dirs cache
+_work_dirs_cache: list[str] | None = None
+_work_dirs_cache_time: float = 0.0
+_WORK_DIRS_CACHE_TTL = 30.0  # seconds
+
+
+def invalidate_work_dirs_cache() -> None:
+    """Clear the work dirs cache."""
+    global _work_dirs_cache, _work_dirs_cache_time
+    _work_dirs_cache = None
+    _work_dirs_cache_time = 0.0
+
+
+def _get_work_dirs_sync() -> list[str]:
+    """Synchronous helper for get_work_dirs (runs in thread pool)."""
+    import time
+
+    global _work_dirs_cache, _work_dirs_cache_time
+
+    # Check cache
+    now = time.time()
+    if _work_dirs_cache is not None and (now - _work_dirs_cache_time) < _WORK_DIRS_CACHE_TTL:
+        return _work_dirs_cache
+
+    # Build fresh list
+    metadata = load_metadata()
+    work_dirs: list[str] = []
+    for wd in metadata.work_dirs:
+        # Filter out temporary directories
+        if "/tmp" in wd.path or "/var/folders" in wd.path or "/.cache/" in wd.path:
+            continue
+        # Verify directory exists
+        if Path(wd.path).exists():
+            work_dirs.append(wd.path)
+
+    # Update cache
+    result = work_dirs[:20]
+    _work_dirs_cache = result
+    _work_dirs_cache_time = now
+    return result
+
+
+@work_dirs_router.get("/", summary="List available work directories")
+async def get_work_dirs() -> list[str]:
+    """Get a list of available work directories from metadata."""
+    return await asyncio.to_thread(_get_work_dirs_sync)
+
+
+@work_dirs_router.get("/startup", summary="Get the startup directory")
+async def get_startup_dir(request: Request) -> str:
+    """Get the directory where kimi web was started."""
+    return request.app.state.startup_dir
+
+
+async def _get_git_diff_for_dir(work_dir: Path) -> GitDiffStats:
+    """Get git diff stats for any directory."""
+    # Check if it is a git repository
+    if not (work_dir / ".git").exists():
+        return GitDiffStats(is_git_repo=False)
+
+    try:
+        files: list[GitFileDiff] = []
+        total_add, total_del = 0, 0
+
+        # Check if HEAD exists (repo has at least one commit)
+        check_proc = await asyncio.create_subprocess_exec(
+            "git",
+            "rev-parse",
+            "--verify",
+            "HEAD",
+            cwd=str(work_dir),
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+            env=get_clean_env(),
+        )
+        await check_proc.wait()
+        has_head = check_proc.returncode == 0
+
+        if has_head:
+            # Execute git diff --numstat HEAD (including staged and unstaged)
+            proc = await asyncio.create_subprocess_exec(
+                "git",
+                "diff",
+                "--numstat",
+                "HEAD",
+                cwd=str(work_dir),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=get_clean_env(),
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+
+            # Parse output
+            for line in stdout.decode().strip().split("\n"):
+                if not line:
+                    continue
+                parts = line.split("\t")
+                if len(parts) >= 3:
+                    add = int(parts[0]) if parts[0] != "-" else 0
+                    dele = int(parts[1]) if parts[1] != "-" else 0
+                    total_add += add
+                    total_del += dele
+                    # Determine file status
+                    file_status: str = "modified"
+                    if dele == 0 and add > 0:
+                        file_status = "added"
+                    elif add == 0 and dele > 0:
+                        file_status = "deleted"
+                    files.append(
+                        GitFileDiff(
+                            path=parts[2],
+                            additions=add,
+                            deletions=dele,
+                            status=file_status,  # type: ignore[arg-type]
+                        )
+                    )
+
+        # Also get untracked files (new files not yet added to git)
+        untracked_proc = await asyncio.create_subprocess_exec(
+            "git",
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            cwd=str(work_dir),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+            env=get_clean_env(),
+        )
+        untracked_stdout, _ = await asyncio.wait_for(untracked_proc.communicate(), timeout=5.0)
+
+        # Add untracked files to the result
+        for line in untracked_stdout.decode().strip().split("\n"):
+            if line:
+                files.append(
+                    GitFileDiff(
+                        path=line,
+                        additions=0,  # Cannot count lines for untracked files
+                        deletions=0,
+                        status="added",
+                    )
+                )
+
+        if not has_head:
+            return GitDiffStats(
+                is_git_repo=True,
+                has_changes=len(files) > 0,
+                total_additions=0,
+                total_deletions=0,
+                files=files,
+            )
+
+        return GitDiffStats(
+            is_git_repo=True,
+            has_changes=len(files) > 0,
+            total_additions=total_add,
+            total_deletions=total_del,
+            files=files,
+        )
+    except TimeoutError:
+        return GitDiffStats(is_git_repo=True, error="Git command timed out")
+    except Exception as e:
+        return GitDiffStats(is_git_repo=True, error=str(e))
+
+
+@router.get("/{session_id}/history", summary="Get paginated wire history")
+async def get_session_history(
+    session_id: UUID,
+    offset: int = 0,
+    limit: int = 200,
+) -> dict[str, Any]:
+    """Return a slice of wire events from the session's wire.jsonl.
+
+    Args:
+        offset: Number of events to skip from the start.
+        limit: Maximum number of events to return (max 500).
+    """
+    session = load_session_by_id(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    wire_file = session.nexus_station_session.dir / "wire.jsonl"
+    if not wire_file.exists():
+        return {"events": [], "total": 0, "offset": offset, "limit": limit}
+
+    if limit <= 0:
+        limit = 200
+    if limit > 500:
+        limit = 500
+    if offset < 0:
+        offset = 0
+
+    lines, total = await asyncio.to_thread(
+        _read_wire_lines, wire_file, max_messages=limit, offset=offset
+    )
+    return {"events": [json.loads(line) for line in lines], "total": total, "offset": offset, "limit": limit}
+
+
+@router.get("/{session_id}/git-diff", summary="Get git diff stats")
+async def get_session_git_diff(session_id: UUID) -> GitDiffStats:
+    """get git diff stats for the session's work directory"""
+    session = load_session_by_id(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    work_dir = Path(str(session.nexus_station_session.work_dir))
+    return await _get_git_diff_for_dir(work_dir)

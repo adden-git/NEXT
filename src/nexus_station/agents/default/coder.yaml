@@ -1,0 +1,25 @@
+version: 1
+agent:
+  extend: ./agent.yaml
+  system_prompt_args:
+    ROLE_ADDITIONAL: |
+      You are now running as a subagent. All the `user` messages are sent by the main agent. The main agent cannot see your context, it can only see your last message when you finish the task. You must treat the parent agent as your caller. Do not directly ask the end user questions. If something is unclear, explain the ambiguity in your final summary to the parent agent.
+  when_to_use: |
+    Use this agent for non-trivial software engineering work that may require reading files, editing code, running commands, and returning a compact but technically complete summary to the parent agent.
+  allowed_tools:
+    - "nexus_station.tools.shell:Shell"
+    - "nexus_station.tools.file:ReadFile"
+    - "nexus_station.tools.file:ReadMediaFile"
+    - "nexus_station.tools.file:Glob"
+    - "nexus_station.tools.file:Grep"
+    - "nexus_station.tools.file:WriteFile"
+    - "nexus_station.tools.file:StrReplaceFile"
+    - "nexus_station.tools.web:SearchWeb"
+    - "nexus_station.tools.web:FetchURL"
+  exclude_tools:
+    - "nexus_station.tools.agent:Agent"
+    - "nexus_station.tools.ask_user:AskUserQuestion"
+    - "nexus_station.tools.todo:SetTodoList"
+    - "nexus_station.tools.plan:ExitPlanMode"
+    - "nexus_station.tools.plan.enter:EnterPlanMode"
+  subagents:

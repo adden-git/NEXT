@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="128" height="128">
+  <defs>
+    <linearGradient id="nexusGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#00f0ff;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#b829dd;stop-opacity:1" />
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <style>
+    .n-letter {
+      fill: url(#nexusGrad);
+      filter: url(#glow);
+      animation: pulse 2s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; filter: url(#glow) drop-shadow(0 0 4px #00f0ff); }
+      50% { opacity: 0.85; filter: url(#glow) drop-shadow(0 0 12px #b829dd); }
+    }
+    .ring {
+      fill: none;
+      stroke: url(#nexusGrad);
+      stroke-width: 2;
+      animation: rotate 8s linear infinite;
+    }
+    @keyframes rotate {
+      from { transform: rotate(0deg); transform-origin: center; }
+      to { transform: rotate(360deg); transform-origin: center; }
+    }
+  </style>
+  <circle cx="50" cy="50" r="46" class="ring" stroke-dasharray="20 10" opacity="0.4"/>
+  <text x="50" y="68" text-anchor="middle" font-family="'Press Start 2P', monospace" font-size="42" class="n-letter">N</text>
+</svg>

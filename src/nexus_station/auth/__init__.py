@@ -1,0 +1,6 @@
+from __future__ import annotations
+
+NEXUS_CODE_PLATFORM_ID = "kimi-code"
+KIMI_CODE_PLATFORM_ID = NEXUS_CODE_PLATFORM_ID
+
+__all__ = ["NEXUS_CODE_PLATFORM_ID", "KIMI_CODE_PLATFORM_ID"]

@@ -1,0 +1,295 @@
+# NEXUS Station v2.0
+
+## Обзор
+
+NEXUS Station — это веб-интерфейс для управления AI-агентами на базе FastAPI (backend) и React 19 (frontend). Система предоставляет полноценный чат-интерфейс с поддержкой сессий, файлового менеджера, SSH-терминала и конфигурации LLM-моделей. Космическая тема оформления (starfield, scanlines, neon accents) — фирменный стиль продукта.
+
+## Архитектура
+
+```
+┌─────────────────┐      WebSocket/HTTP       ┌─────────────────┐
+│   React 19      │ ◄───────────────────────► │   FastAPI       │
+│   Vite +        │     JSON-RPC over WS      │   (uvicorn)     │
+│   Tailwind v4   │                           │                 │
+└─────────────────┘                           └────────┬────────┘
+                                                       │
+                              ┌────────────────────────┼────────────────────────┐
+                              │                        │                        │
+                              ▼                        ▼                        ▼
+                        ┌──────────┐          ┌──────────────┐         ┌─────────────┐
+                        │ Sessions │          │  CLI Runner  │         │   Config    │
+                        │  Store   │          │  (subprocess)│         │   (TOML)    │
+                        └──────────┘          └──────────────┘         └─────────────┘
+```
+
+- **Backend**: `src/nexus_station/web/` — FastAPI приложение
+- **Frontend**: `web/src/` — React 19 + Vite + Tailwind v4 + shadcn/ui
+- **CLI Runner**: `nexus_station.web.runner.process` — управление subprocess сессиями
+- **Wire Protocol**: JSON-RPC 2.0 через WebSocket для real-time коммуникации
+
+## Запуск
+
+```bash
+# Разработка (frontend + backend hot reload)
+cd next/web && npm run dev
+cd next && python run.py
+
+# Продакшен (собранный frontend)
+cd next/web && NODE_OPTIONS="--max-old-space-size=2048" npx vite build --minify=false
+cd next && python run.py
+```
+
+**Порт по умолчанию**: 5600  
+**Хост**: `0.0.0.0` (доступен извне)  
+**Auth**: динамические user tokens
+
+## Backend API
+
+### Auth (`/api/auth`)
+
+| Endpoint | Method | Описание |
+|----------|--------|----------|
+| `/api/auth/status` | GET | Проверка, настроена ли авторизация |
+| `/api/auth/setup` | POST | Создание первого пользователя (admin) |
+| `/api/auth/login` | POST | Логин по username/password → возвращает token |
+| `/api/auth/me` | POST | Проверка токена, возвращает username |
+| `/api/auth/refresh` | POST | Перегенерация токена (старый становится невалидным) |
+
+Пользователи хранятся в `~/.nexus/web_users.json` с PBKDF2-хешированием паролей. Токены — `secrets.token_urlsafe(32)`.
+
+### Config (`/api/config`)
+
+| Endpoint | Method | Описание |
+|----------|--------|----------|
+| `/api/config` | GET | Полная конфигурация системы (models, default_model и т.д.) |
+| `/api/config` | POST | Обновление конфигурации с перезапуском сессий |
+| `/api/config/license` | GET | Статус лицензии |
+
+Конфигурация читается из `~/.nexus/config.toml`. Поддерживает множественные LLM-модели с разными провайдерами.
+
+### Sessions (`/api/sessions`)
+
+| Endpoint | Method | Описание |
+|----------|--------|----------|
+| `/api/sessions` | GET | Список всех сессий с пагинацией |
+| `/api/sessions` | POST | Создание новой сессии |
+| `/api/sessions/{id}` | GET | Детали сессии |
+| `/api/sessions/{id}` | PATCH | Обновление title/archived |
+| `/api/sessions/{id}` | DELETE | Удаление сессии |
+| `/api/sessions/{id}/stream` | WS | WebSocket поток сообщений (JSON-RPC) |
+| `/api/sessions/{id}/cancel` | POST | Отмена текущего prompt |
+| `/api/sessions/{id}/upload` | POST | Загрузка файлов в сессию |
+| `/api/sessions/{id}/title` | POST | Генерация заголовка по содержимому |
+| `/api/sessions/{id}/fork` | POST | Форк сессии с копией контекста |
+| `/api/sessions/{id}/export` | GET | Экспорт сессии (wire.jsonl) |
+
+**SessionProcess** (`runner/process.py`):
+- Каждая сессия — это subprocess `nexus_station.web.runner.worker`
+- Subprocess читает stdin / пишет stdout в формате JSON-RPC
+- WebSocket fanout: одна сессия → множество клиентов
+- Replay buffer для новых клиентов (история из `wire.jsonl` + буфер live сообщений)
+- Статусы: `stopped` → `idle` → `busy` → `idle` → `error`/`restarting`
+- Автоматический resize изображений > 4096px перед отправкой в модель
+
+### Work Dirs (`/api/work-dirs`)
+
+| Endpoint | Method | Описание |
+|----------|--------|----------|
+| `/api/work-dirs` | GET | Список рабочих директорий |
+| `/api/work-dirs/{path}/git-diff` | GET | Git diff статистика |
+| `/api/work-dirs/{path}/git-commit` | POST | Git commit изменений |
+
+### Files (`/api/files`)
+
+| Endpoint | Method | Описание |
+|----------|--------|----------|
+| `/api/files/list?path=` | GET | Список файлов в директории |
+| `/api/files/read?path=` | GET | Чтение файла |
+| `/api/files/write` | POST | Запись файла |
+| `/api/files/mkdir` | POST | Создание директории |
+| `/api/files/delete` | POST | Удаление файла/директории |
+| `/api/files/rename` | POST | Переименование |
+| `/api/files/upload` | POST | Загрузка файла |
+
+Файловый менеджер работает с абсолютными путями. В публичном режиме sensitive APIs могут быть ограничены.
+
+### SSH (`/api/ssh`)
+
+| Endpoint | Method | Описание |
+|----------|--------|----------|
+| `/api/ssh/connect` | POST | Выполнение SSH команды |
+| `/api/ssh/status` | POST | Статус системы (pm2, disk, uptime) |
+| `/api/ssh/terminal?session=` | WS | Интерактивный SSH терминал через WebSocket |
+
+Поддерживает авторизацию по паролю и по private key (RSA). WebSocket терминал использует paramiko для интерактивных сессий.
+
+### Open In (`/api/open-in`)
+
+Открытие локальных приложений для пути:
+- `finder`, `cursor`, `vscode`, `iterm`, `terminal`, `antigravity`
+
+## Auth Middleware
+
+```
+LAN-only check → OPTIONS skip → public endpoints skip → Origin check → Token verify → API access
+```
+
+- **Legacy mode**: статический `session_token` (из env `NEXT_WEB_SESSION_TOKEN`)
+- **Dynamic mode**: проверка токена против `~/.nexus/web_users.json`
+- **Origin enforcement**: в публичном режиме проверяется `Origin` header
+- **LAN-only**: доступ только с private IP (RFC 1918)
+
+## Frontend
+
+### Стек
+
+- **React 19** + TypeScript
+- **Vite** (build tool)
+- **Tailwind CSS v4** с кастомной космической темой
+- **shadcn/ui** компоненты (dialog, dropdown, toast и т.д.)
+- **WebSocket API** для real-time сессий
+
+### Космическая тема
+
+- **Шрифты**: Press Start 2P (HUD заголовки), VT323 (терминал), Share Tech Mono (основной текст)
+- **Фон**: Canvas starfield анимация (живое звёздное поле)
+- **Эффекты**: CRT scanlines overlay, vignette, neon glow (cyan `#00f0ff`, purple `#b829dd`)
+- **Цвета**: Dark space palette — глубокий фон `oklch(0.12 0.04 280)`, акценты cyan/purple
+- **CSS variables**: `--background`, `--foreground`, `--primary` в `index.css`
+
+### Компоненты
+
+| Компонент | Описание |
+|-----------|----------|
+| `App.tsx` | Корневой роутер, управление сессиями |
+| `auth-page.tsx` | Страница логина / первой настройки |
+| `ai-elements/conversation.tsx` | Чат-интерфейс с сообщениями |
+| `ai-elements/code-block.tsx` | Подсветка синтаксиса + копирование |
+| `ai-elements/tool.tsx` | Отображение вызовов инструментов |
+| `ai-elements/prompt-input.tsx` | Поле ввода с поддержкой загрузки файлов |
+| `ai-elements/model-selector.tsx` | Выбор LLM модели |
+| `ai-elements/settings-dialog.tsx` | Настройки сессии (temperature, top_p, max_tokens) |
+| `session-settings-dialog.tsx` | Диалог настроек сессии |
+| `nexus-station-brand.tsx` | Логотип и брендинг |
+| `components/ui/*` | shadcn/ui компоненты (50+ компонентов) |
+
+### State Management
+
+- Локальный state через React hooks
+- WebSocket сообщения десериализуются через `deserialize_wire_message`
+- Сессии кэшируются на backend (TTL 5 сек), invalidate на mutation
+
+## Wire Protocol
+
+JSON-RPC 2.0 over WebSocket:
+
+**Inbound (client → server → worker)**:
+```json
+{"jsonrpc":"2.0","method":"prompt","id":"...","params":{"user_input":"..."}}
+{"jsonrpc":"2.0","method":"cancel","id":"..."}
+```
+
+**Outbound (worker → server → client)**:
+```json
+{"jsonrpc":"2.0","method":"event","params":{...}}
+{"jsonrpc":"2.0","id":"...","result":{...}}
+{"jsonrpc":"2.0","id":"...","error":{"code":...,"message":"..."}}
+```
+
+События: `Text`, `ToolCall`, `ToolResult`, `Checkpoint`, `StatusUpdate`, `SessionNotice`
+
+## Сессии и хранение
+
+- **Session dir**: `~/.nexus/sessions/<uuid>/`
+- **Файлы сессии**:
+  - `wire.jsonl` — полная история сообщений
+  - `context.jsonl` — контекст для LLM
+  - `state.json` — состояние сессии (model_params, work_dir)
+  - `uploads/` — загруженные пользователем файлы
+- **Metadata**: `~/.nexus/metadata.json` — индекс всех сессий
+- **Auto-archive**: сессии старше 15 дней архивируются
+
+## Конфигурация
+
+Файл: `~/.nexus/config.toml`
+
+```toml
+[llm]
+default_model = "gpt-4o"
+
+[llm.models.gpt-4o]
+provider = "openai"
+api_key = "sk-..."
+model = "gpt-4o"
+temperature = 0.7
+
+[llm.models.claude-sonnet]
+provider = "anthropic"
+api_key = "sk-ant-..."
+model = "claude-3-5-sonnet-20241022"
+```
+
+Поддерживаемые провайдеры: OpenAI, Anthropic, Google, Azure, локальные модели через kosong.
+
+## Инструменты (Tools)
+
+Система использует встроенные инструменты из `nexus_station.tools`:
+
+- `shell` — выполнение shell команд
+- `file` — чтение/запись/поиск файлов
+- `web` — поиск в интернете
+- `agent` — создание subagent-ов для параллельных задач
+- `todo` — управление todo-листом
+- `think` — режим глубокого размышления
+- `plan` — планирование через EnterPlanMode
+
+## Безопасность
+
+- **Auth**: PBKDF2-SHA256 для паролей, timing-safe token comparison
+- **CORS**: configurable allowed origins
+- **LAN-only mode**: доступ только из private сетей
+- **Restrict sensitive APIs**: в публичном режиме файловый менеджер и SSH могут быть отключены
+- **Input validation**: Pydantic models на всех endpoints
+
+## Разработка
+
+### Backend
+```bash
+# Запуск с hot reload
+uvicorn nexus_station.web.app:create_app --factory --reload --host 0.0.0.0 --port 5600
+
+# Тесты
+pytest tests/
+```
+
+### Frontend
+```bash
+cd web
+npm install
+npm run dev        # dev server
+npm run build      # production build
+```
+
+### Build production
+```bash
+cd web
+NODE_OPTIONS="--max-old-space-size=2048" npx vite build --minify=false
+cp -r dist/* ../src/nexus_station/web/static/
+```
+
+## Environment Variables
+
+| Переменная | Описание |
+|------------|----------|
+| `LOG_LEVEL` | Уровень логирования (DEBUG, INFO, WARNING, ERROR) |
+| `NEXT_WEB_SESSION_TOKEN` | Статический session token (legacy mode) |
+| `NEXT_WEB_ALLOWED_ORIGINS` | Разрешённые origins для CORS |
+| `NEXT_WEB_ENFORCE_ORIGIN` | Принудительная проверка Origin |
+| `NEXT_WEB_LAN_ONLY` | Только LAN доступ |
+| `NEXT_WEB_RESTRICT_SENSITIVE_APIS` | Ограничить sensitive APIs |
+
+## Полезные ссылки
+
+- GitHub: https://github.com/adden-git/NEXT
+- Web UI: http://94.241.142.95:5600
+- API Docs: `/scalar` или `/docs` (если включено)
