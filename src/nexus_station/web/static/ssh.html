@@ -237,6 +237,7 @@
       <option value="molten">🔥 Плавленая</option>
     </select>
     <span class="status-dot" id="status-dot"></span>
+    <button class="btn" onclick="ctxPaste()" title="Вставить из буфера"><i class="ph ph-clipboard-text"></i></button>
     <button class="btn primary" onclick="reconnect()" title="Переподключить"><i class="ph ph-arrows-clockwise"></i></button>
   </div>
 </div>
@@ -358,22 +359,110 @@
     document.getElementById('logs-panel').textContent = '';
   }
 
-  async function ctxPaste() {
-    hideCtxMenu();
-    try {
-      const text = await navigator.clipboard.readText();
-      if (!text) { setStatus('Буфер пуст', 'err'); return; }
-      if (ws && ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'stdin', data: text }));
-        setStatus('Вставлено', 'ok');
-        setTimeout(() => setStatus(ws ? 'Подключено' : 'Отключено', ws ? 'ok' : ''), 1500);
-      } else {
-        setStatus('Нет подключения', 'err');
-      }
-    } catch (e) {
-      setStatus('Нет доступа к буферу', 'err');
-      console.error('Paste failed:', e);
+  function sendPaste(text) {
+    if (!text) { setStatus('Буфер пуст', 'err'); return; }
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'stdin', data: text }));
+      setStatus('Вставлено', 'ok');
+      setTimeout(() => setStatus(ws ? 'Подключено' : 'Отключено', ws ? 'ok' : ''), 1500);
+    } else {
+      setStatus('Нет подключения', 'err');
     }
+  }
+
+  function ctxPaste() {
+    hideCtxMenu();
+
+    // Method 1: Modern Clipboard API (HTTPS only)
+    if (navigator.clipboard && navigator.clipboard.readText) {
+      navigator.clipboard.readText().then(text => {
+        if (text) { sendPaste(text); }
+        else { showPasteOverlay(); }
+      }).catch(() => {
+        showPasteOverlay();
+      });
+      return;
+    }
+
+    showPasteOverlay();
+  }
+
+  function showPasteOverlay() {
+    // Remove existing overlay if any
+    const existing = document.getElementById('paste-overlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'paste-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(10,10,26,0.85);z-index:10000;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;padding:20px;font-family:"Share Tech Mono",monospace;';
+
+    const box = document.createElement('div');
+    box.style.cssText = 'background:var(--bg-2);border:1px solid var(--border);border-radius:12px;padding:20px;width:100%;max-width:420px;display:flex;flex-direction:column;gap:12px;box-shadow:var(--shadow);';
+
+    const title = document.createElement('div');
+    title.textContent = 'Вставить из буфера';
+    title.style.cssText = 'color:var(--accent);font-size:14px;font-weight:700;text-align:center;';
+
+    const hint = document.createElement('div');
+    hint.textContent = 'Нажмите на поле → выберите Вставить';
+    hint.style.cssText = 'color:var(--fg-3);font-size:11px;text-align:center;';
+
+    const ta = document.createElement('textarea');
+    ta.style.cssText = 'width:100%;height:100px;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--fg);font-size:13px;font-family:monospace;resize:none;outline:none;';
+    ta.placeholder = 'Вставьте текст сюда...';
+
+    const btnRow = document.createElement('div');
+    btnRow.style.cssText = 'display:flex;gap:10px;justify-content:flex-end;';
+
+    const pasteBtn = document.createElement('button');
+    pasteBtn.textContent = 'Отправить';
+    pasteBtn.className = 'btn primary';
+    pasteBtn.style.cssText = 'padding:8px 16px;border-radius:6px;border:none;background:var(--accent);color:var(--bg);font-weight:700;cursor:pointer;font-family:"Share Tech Mono",monospace;font-size:12px;';
+    pasteBtn.onclick = () => {
+      sendPaste(ta.value);
+      overlay.remove();
+    };
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.textContent = 'Отмена';
+    cancelBtn.className = 'btn';
+    cancelBtn.style.cssText = 'padding:8px 16px;border-radius:6px;border:1px solid var(--border);background:var(--bg-3);color:var(--fg);cursor:pointer;font-family:"Share Tech Mono",monospace;font-size:12px;';
+    cancelBtn.onclick = () => { overlay.remove(); };
+
+    btnRow.appendChild(cancelBtn);
+    btnRow.appendChild(pasteBtn);
+
+    box.appendChild(title);
+    box.appendChild(hint);
+    box.appendChild(ta);
+    box.appendChild(btnRow);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+
+    // Auto-focus and select-all on focus to trigger native paste menu on mobile
+    setTimeout(() => {
+      ta.focus();
+      ta.select();
+    }, 100);
+
+    // Auto-submit on paste
+    ta.addEventListener('paste', () => {
+      setTimeout(() => {
+        if (ta.value.trim()) {
+          sendPaste(ta.value);
+          overlay.remove();
+        }
+      }, 50);
+    });
+
+    // Enter to submit (Ctrl+Enter or just Enter)
+    ta.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendPaste(ta.value);
+        overlay.remove();
+      }
+    });
   }
 
   function changeTheme(name) {
