@@ -220,7 +220,8 @@ next/
 |:---|:---|
 | **🤖 AI-агент** | Полноценный цикл взаимодействия с LLM — от запроса до выполнения |
 | **🛡️ Shield AI** | Двойная проверка безопасности перед выполнением операций |
-| **📁 Файловый менеджер** | Просмотр и редактирование файлов через CodeMirror |
+| **📁 Файловый менеджер** | Просмотр, скачивание файлов и директорий (ZIP), навигация |
+| **🔒 Безопасность** | Path traversal защита, лимиты размера, symlink блокировка |
 | **💻 SSH-терминал** | Встроенный терминал на базе xterm.js с космической темой |
 | **📡 WebSocket** | Real-time коммуникации с бэкендом |
 | **⚙️ Настройки сессии** | Параметры модели, Git diff, Guardian, цепочка рассуждений |
@@ -239,8 +240,20 @@ next/
 | **OpenAI** | ✅ | GPT-4, GPT-4o |
 | **Anthropic** | ✅ | Claude 3.5/4 |
 | **Google** | ✅ | Gemini |
-| **Fireworks** | ✅ | Быстрые open-source модели |
+| **Fireworks** | ✅ | Llama, Qwen, DeepSeek |
 | **Local** | ✅ | Локальные модели через Ollama/vLLM |
+
+---
+
+## 🔒 Безопасность
+
+- **Path Traversal Protection**: `resolve()` + `is_relative_to()` на всех file endpoints
+- **Symlink Blocking**: `followlinks=False` в `os.walk`, обнаружение symlink в public mode
+- **Size Limits**: upload 100MB, file read 50MB (streamed), ZIP download 500MB, image processing 20MB
+- **Name Sanitization**: `sanitize_filename()` на всех user-provided filenames
+- **Work Dir Restriction**: создание директорий только внутри `$HOME`
+- **Template Injection Protection**: валидация `{}` и `/` в `create_instruction_file`
+- **Credential Storage**: `web_users.json` с правами `chmod 600`
 
 ---
 
