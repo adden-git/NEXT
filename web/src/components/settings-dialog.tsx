@@ -548,10 +548,10 @@ export function SettingsDialog() {
                       markDirty();
                     }}>+ OpenRouter</Button>
                     <Button variant="outline" size="sm" onClick={() => {
-                      if (cfg.providers["fireworks"]) { toast.error("Fireworks уже добавлен"); return; }
                       setCfg((prev) => {
                         if (!prev) return prev;
-                        const nextProviders = { ...prev.providers, fireworks: { type: "openai_legacy", base_url: "https://api.fireworks.ai/inference/v1", api_key: "" } };
+                        const providerExists = !!prev.providers["fireworks"];
+                        const nextProviders = providerExists ? prev.providers : { ...prev.providers, fireworks: { type: "openai_legacy", base_url: "https://api.fireworks.ai/inference/v1", api_key: "" } };
                         const nextModels = { ...prev.models };
                         const fireworksModels: Record<string, { provider: string; model: string; max_context_size: number; capabilities: string[]; display_name: string }> = {
                           "llama-3.2-3b": { provider: "fireworks", model: "accounts/fireworks/models/llama-v3p2-3b-instruct", max_context_size: 131072, capabilities: [], display_name: "Llama 3.2 3B" },
@@ -559,15 +559,27 @@ export function SettingsDialog() {
                           "qwen-2.5-7b": { provider: "fireworks", model: "accounts/fireworks/models/qwen2p5-7b-instruct", max_context_size: 32768, capabilities: [], display_name: "Qwen2.5 7B" },
                           "deepseek-v3": { provider: "fireworks", model: "accounts/fireworks/models/deepseek-v3", max_context_size: 65536, capabilities: [], display_name: "DeepSeek V3" },
                         };
+                        let addedCount = 0;
                         for (const [k, v] of Object.entries(fireworksModels)) {
-                          if (!nextModels[k]) nextModels[k] = v;
+                          if (!nextModels[k]) {
+                            nextModels[k] = v;
+                            addedCount++;
+                          }
+                        }
+                        if (!providerExists && addedCount === 0) {
+                          toast.error("Fireworks уже добавлен");
+                          return prev;
                         }
                         const next = { ...prev, providers: nextProviders, models: nextModels };
                         cfgRef.current = next;
+                        if (addedCount > 0) {
+                          toast.success(providerExists ? "Fireworks модели добавлены" : "Fireworks добавлен", { description: `Добавлено ${addedCount} моделей` });
+                        } else {
+                          toast.info("Все Fireworks модели уже есть в конфиге");
+                        }
                         return next;
                       });
                       markDirty();
-                      toast.success("Fireworks добавлен", { description: "Добавлено 4 модели: Llama 3.2 3B, Llama 3.1 8B, Qwen2.5 7B, DeepSeek V3" });
                     }}>+ Fireworks</Button>
                   </div>
                 </div>
