@@ -30,6 +30,8 @@ def _save_users(users: dict[str, Any]) -> None:
     _USERS_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(_USERS_FILE, "w", encoding="utf-8") as f:
         json.dump(users, f, ensure_ascii=False, indent=2)
+    # Restrict file permissions so only owner can read credentials
+    os.chmod(_USERS_FILE, 0o600)
 
 
 def _hash_password(password: str, salt: str | None = None) -> tuple[str, str]:

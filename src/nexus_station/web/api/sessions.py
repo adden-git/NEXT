@@ -61,6 +61,8 @@ work_dirs_router = APIRouter(prefix="/api/work-dirs", tags=["work-dirs"])
 
 # Constants
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100MB
+MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB — files larger than this are streamed
+MAX_ZIP_SIZE = 500 * 1024 * 1024  # 500MB — max total size for ZIP downloads
 MAX_REPLAY_WIRE_MESSAGES = 200  # Max wire events to replay on reconnect
 DEFAULT_MAX_PUBLIC_PATH_DEPTH = 6
 SENSITIVE_PATH_PARTS = {
@@ -346,6 +348,13 @@ async def create_session(request: CreateSessionRequest | None = None) -> Session
     # Use provided work_dir or default to user's home directory
     if request and request.work_dir:
         work_dir_path = Path(request.work_dir).expanduser().resolve()
+        # Security: restrict directory creation to within the user's home directory
+        home_dir = Path.home().resolve()
+        if not work_dir_path.is_relative_to(home_dir):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Work directory must be within your home directory",
+            )
         # Validate the directory exists
         if not work_dir_path.exists():
             if request.create_dir:
@@ -432,13 +441,22 @@ async def upload_session_file(
     upload_dir = session_dir / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
 
-    # Read and validate file size
-    content = await file.read()
-    if len(content) > MAX_UPLOAD_SIZE:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail=f"File too large (max {MAX_UPLOAD_SIZE // 1024 // 1024}MB)",
-        )
+    # Read file in chunks to avoid loading entire file into memory before size check
+    chunk_size = 8192
+    content = bytearray()
+    total_size = 0
+    while True:
+        chunk = await file.read(chunk_size)
+        if not chunk:
+            break
+        total_size += len(chunk)
+        if total_size > MAX_UPLOAD_SIZE:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"File too large (max {MAX_UPLOAD_SIZE // 1024 // 1024}MB)",
+            )
+        content.extend(chunk)
+    content = bytes(content)
 
     # Generate safe filename
     file_name = str(uuid4())
@@ -453,7 +471,7 @@ async def upload_session_file(
     return UploadSessionFileResponse(
         path=str(upload_path),
         filename=file_name,
-        size=len(content),
+        size=total_size,
     )
 
 
@@ -581,8 +599,25 @@ async def get_session_file(
         result.sort(key=lambda x: (cast(str, x["type"]), cast(str, x["name"])))
         return Response(content=json.dumps(result), media_type="application/json")
 
-    content = file_path.read_bytes()
+    # Security: limit in-memory reads to avoid DoS
+    try:
+        file_size = file_path.stat().st_size
+    except OSError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not accessible",
+        )
     media_type, _ = mimetypes.guess_type(file_path.name)
+    if file_size > MAX_FILE_SIZE:
+        # Stream large files instead of loading into memory
+        encoded_filename = quote(file_path.name, safe="")
+        return FileResponse(
+            path=file_path,
+            media_type=media_type or "application/octet-stream",
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"},
+        )
+
+    content = file_path.read_bytes()
     encoded_filename = quote(file_path.name, safe="")
     return Response(
         content=content,
@@ -656,7 +691,9 @@ async def download_session_folder(
             detail="Path is not a directory",
         )
 
+    # Build ZIP with size limit to prevent memory exhaustion
     buf = io.BytesIO()
+    total_size = 0
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
         for file_path in sorted(folder_path.rglob("*")):
             if file_path.is_file():
@@ -672,7 +709,22 @@ async def download_session_folder(
                             continue
                     except (ValueError, OSError):
                         continue
-                arcname = str(file_path.relative_to(folder_path))
+                # Enforce total ZIP size limit
+                try:
+                    file_size = file_path.stat().st_size
+                except OSError:
+                    continue
+                total_size += file_size
+                if total_size > MAX_ZIP_SIZE:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=f"Directory too large to download (max {MAX_ZIP_SIZE // 1024 // 1024}MB)",
+                    )
+                try:
+                    arcname = str(file_path.relative_to(folder_path))
+                except ValueError:
+                    # Skip files that can't be relative to folder_path (e.g. symlinks outside)
+                    continue
                 zf.write(file_path, arcname=arcname)
     buf.seek(0)
 
@@ -1015,7 +1067,7 @@ async def get_session_instructions(
         subdir = work_dir / subdir_name
         if not subdir.is_dir():
             continue
-        for root, _dirs, filenames in os.walk(subdir):
+        for root, _dirs, filenames in os.walk(subdir, followlinks=False):
             for fname in filenames:
                 if not fname.lower().endswith(".md"):
                     continue
@@ -1179,6 +1231,20 @@ exit 0
             detail=f"Unknown type: {request.type}. Supported: {', '.join(templates.keys())}",
         )
 
+    # Security: sanitize name to prevent path traversal
+    if request.name:
+        if ".." in request.name or "/" in request.name or "\\" in request.name:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid name: path traversal not allowed",
+            )
+        # Also reject format-string injection attempts
+        if "{" in request.name or "}" in request.name:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid name: braces not allowed",
+            )
+
     dest_path, template = templates[request.type]
     dest_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -1188,11 +1254,17 @@ exit 0
             detail=f"File already exists: {dest_path}",
         )
 
-    content = template.format(
-        project=work_dir.name,
-        date=datetime.now(UTC).strftime("%Y-%m-%d"),
-        name=request.name or "my-template",
-    )
+    try:
+        content = template.format(
+            project=work_dir.name,
+            date=datetime.now(UTC).strftime("%Y-%m-%d"),
+            name=request.name or "my-template",
+        )
+    except KeyError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid template variable: {e}",
+        ) from e
     dest_path.write_text(content, encoding="utf-8")
 
     return {
@@ -1252,7 +1324,7 @@ async def refactor_session_instructions(
         subdir = work_dir / subdir_name
         if not subdir.is_dir():
             continue
-        for root, _dirs, filenames in os.walk(subdir):
+        for root, _dirs, filenames in os.walk(subdir, followlinks=False):
             for fname in filenames:
                 if fname.lower().endswith(".md"):
                     all_files.append(Path(root) / fname)

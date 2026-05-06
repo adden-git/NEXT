@@ -19,6 +19,13 @@ from uuid import UUID, uuid4
 from kosong.message import ContentPart, ImageURLPart, TextPart
 from PIL import Image
 from PIL.Image import Image as PILImage
+
+# Security: limit file sizes to prevent memory exhaustion
+MAX_UPLOADED_FILE_SIZE = 20 * 1024 * 1024  # 20MB
+MAX_STDERR_READ = 64 * 1024  # 64KB
+
+# Limit PIL image decompression to prevent bomb attacks
+Image.MAX_IMAGE_PIXELS = 100_000_000  # ~100MP
 from pydantic import TypeAdapter
 from starlette.websockets import WebSocket, WebSocketState
 
@@ -323,7 +330,7 @@ class SessionProcess:
                     if self._process.stdout.at_eof():
                         if self._expecting_exit:
                             break
-                        stderr = await self._process.stderr.read()
+                        stderr = await self._process.stderr.read(MAX_STDERR_READ)
                         if not stderr:
                             stderr = b"No stderr"
                         # Clear in-flight IDs before broadcasting so that
@@ -480,6 +487,9 @@ class SessionProcess:
 
             if is_vision and mime_type.startswith("image/"):
                 try:
+                    # Security: skip files that are too large
+                    if file.stat().st_size > MAX_UPLOADED_FILE_SIZE:
+                        continue
                     content = file.read_bytes()
                     with Image.open(io.BytesIO(content)) as img:
                         pil_img: PILImage = img
@@ -511,6 +521,9 @@ class SessionProcess:
                 yield TextPart(text="</video>\n\n")
             elif ext in text_extensions or mime_type.startswith("text/"):
                 try:
+                    # Security: skip files that are too large
+                    if file.stat().st_size > MAX_UPLOADED_FILE_SIZE:
+                        continue
                     content = file.read_bytes()
                     text_content = content.decode("utf-8", errors="replace")
                     yield TextPart(text=f'<document path="{file_path}" content_type="{mime_type}">')

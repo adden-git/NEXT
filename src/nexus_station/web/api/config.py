@@ -531,6 +531,10 @@ async def post_update(request: Request) -> dict[str, Any]:
     logs.append("=== pm2 restart ===")
     pm2_name = _get_pm2_name()
     if pm2_name:
+        # Security: validate pm2_name to prevent command injection
+        if not pm2_name.replace("-", "").replace("_", "").replace(".", "").isalnum():
+            logs.append("PM2 name contains invalid characters, skipping restart")
+            return {"success": False, "logs": logs, "error": "Invalid PM2 process name"}
         # Schedule restart after a short delay so the HTTP response can be
         # fully sent before the process is killed.
         import threading
