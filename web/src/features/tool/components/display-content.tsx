@@ -13,6 +13,22 @@ import {
 import type { ComponentProps } from "react";
 import { Suspense, useEffect, useMemo, useState } from "react";
 
+/** Validate that a URL is safe to use in an href attribute.
+ *  Rejects javascript:, data:, vbscript:, file: and other dangerous protocols.
+ */
+function isSafeUrl(url: string | undefined): boolean {
+  if (!url) return false;
+  try {
+    const parsed = new URL(url, window.location.href);
+    // Only allow http and https protocols
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    // Relative URLs are generally safe if they don't start with a dangerous protocol
+    const dangerous = /^(javascript|data|vbscript|file|about|chrome):/i;
+    return !dangerous.test(url.trim());
+  }
+}
+
 export type DisplayItem = {
   type: string;
   data: unknown;
@@ -162,7 +178,7 @@ const ImageSearchByTextResults = ({
       {result.images.map((image, idx) => (
         <a
           key={`${result.requestId}-${idx}`}
-          href={image.original}
+          href={isSafeUrl(image.original) ? image.original : "#"}
           target="_blank"
           rel="noopener noreferrer"
           className="group relative overflow-hidden rounded-md border border-border/40 bg-card/20 transition-all hover:border-border hover:bg-card/40"
@@ -214,7 +230,7 @@ const ImageSearchByImageResults = ({
       >
         {item.thumbnailUrl && (
           <a
-            href={item.link}
+            href={isSafeUrl(item.link) ? item.link : "#"}
             target="_blank"
             rel="noopener noreferrer"
             className="flex-shrink-0"
@@ -234,7 +250,7 @@ const ImageSearchByImageResults = ({
         )}
         <div className="min-w-0 flex-1">
           <a
-            href={item.link}
+            href={isSafeUrl(item.link) ? item.link : "#"}
             target="_blank"
             rel="noopener noreferrer"
             className="font-medium text-foreground hover:text-primary text-sm line-clamp-2"
@@ -266,7 +282,7 @@ const WebSearchResults = ({ result }: { result: WebSearchResult }) => (
         {/* Title row with metadata */}
         <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between sm:gap-2">
           <a
-            href={chunk.url}
+            href={isSafeUrl(chunk.url) ? chunk.url : "#"}
             target="_blank"
             rel="noopener noreferrer"
             className="flex-1 font-medium text-foreground hover:text-primary text-sm line-clamp-1"
@@ -339,7 +355,7 @@ const SearchResponseResults = ({
             />
           )}
           <a
-            href={chunk.page.url}
+            href={isSafeUrl(chunk.page.url) ? chunk.page.url : "#"}
             target="_blank"
             rel="noopener noreferrer"
             className="flex-1 font-medium text-foreground hover:text-primary text-sm line-clamp-1"
