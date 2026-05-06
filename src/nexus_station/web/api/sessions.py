@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 from collections import deque
 from datetime import UTC, datetime
 from nexus_station.web.utils._json import json
@@ -10,13 +11,14 @@ import mimetypes
 import os
 import shutil
 import time
+import zipfile
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import quote
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, status
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from kaos.path import KaosPath
 from pydantic import BaseModel, Field
 from starlette.websockets import WebSocket, WebSocketDisconnect
@@ -586,6 +588,99 @@ async def get_session_file(
         content=content,
         media_type=media_type or "application/octet-stream",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"},
+    )
+
+
+@router.get(
+    "/{session_id}/folders/{path:path}",
+    summary="Download a directory from session work_dir as ZIP",
+)
+async def download_session_folder(
+    session_id: UUID,
+    path: str,
+    request: Request,
+) -> StreamingResponse:
+    """Download a directory from session work directory as a ZIP archive."""
+    session = load_session_by_id(session_id)
+    if session is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Session not found",
+        )
+
+    # Security check: prevent path traversal attacks using resolve()
+    work_dir = Path(str(session.nexus_station_session.work_dir)).resolve()
+    requested_path = work_dir / path
+    folder_path = requested_path.resolve()
+
+    # Check path traversal
+    if not folder_path.is_relative_to(work_dir):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid path: path traversal not allowed",
+        )
+
+    rel_path = folder_path.relative_to(work_dir)
+    restrict_sensitive_apis = getattr(request.app.state, "restrict_sensitive_apis", False)
+    max_path_depth = (
+        getattr(request.app.state, "max_public_path_depth", None) or DEFAULT_MAX_PUBLIC_PATH_DEPTH
+    )
+
+    # Additional security checks when restricting sensitive APIs
+    if restrict_sensitive_apis:
+        # Check for symlinks in the path
+        if _contains_symlink(requested_path, work_dir):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Symbolic links are not allowed in public mode.",
+            )
+
+        # Check if resolved path points to sensitive location
+        if _is_path_in_sensitive_location(folder_path):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access to sensitive system directories is not allowed.",
+            )
+
+    _ensure_public_file_access_allowed(rel_path, restrict_sensitive_apis, max_path_depth)
+
+    if not folder_path.exists():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Directory not found",
+        )
+
+    if not folder_path.is_dir():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Path is not a directory",
+        )
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for file_path in sorted(folder_path.rglob("*")):
+            if file_path.is_file():
+                # Security: skip symlinks and sensitive files in public mode
+                if restrict_sensitive_apis:
+                    try:
+                        file_rel = file_path.relative_to(work_dir)
+                        if _contains_symlink(file_path, work_dir):
+                            continue
+                        if _is_sensitive_relative_path(file_rel):
+                            continue
+                        if _is_path_in_sensitive_location(file_path):
+                            continue
+                    except (ValueError, OSError):
+                        continue
+                arcname = str(file_path.relative_to(folder_path))
+                zf.write(file_path, arcname=arcname)
+    buf.seek(0)
+
+    filename = f"{rel_path.name}.zip" if str(rel_path) != "." else "workspace.zip"
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

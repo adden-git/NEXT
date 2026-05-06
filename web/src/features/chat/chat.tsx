@@ -66,6 +66,8 @@ type ChatWorkspaceProps = {
   ) => Promise<SessionFileEntry[]>;
   /** Build a direct download URL for a workspace file */
   onGetSessionFileUrl?: (sessionId: string, path: string) => string;
+  /** Build a direct download URL for a workspace folder as ZIP */
+  onGetSessionFolderUrl?: (sessionId: string, path: string) => string;
   /** Fetch a workspace file as a Blob for preview */
   onGetSessionFile?: (sessionId: string, path: string) => Promise<Blob>;
   /** Cancel the current streaming turn */
@@ -117,6 +119,7 @@ export const ChatWorkspace = memo(function ChatWorkspaceComponent({
   isReplayingHistory = false,
   onListSessionDirectory,
   onGetSessionFileUrl,
+  onGetSessionFolderUrl,
   onGetSessionFile: _onGetSessionFile,
   onCancel,
   isUploadingFiles = false,
@@ -387,6 +390,7 @@ export const ChatWorkspace = memo(function ChatWorkspaceComponent({
                   onClose={handleCloseFilesPanel}
                   onListSessionDirectory={onListSessionDirectory}
                   onGetSessionFileUrl={onGetSessionFileUrl}
+                  onGetSessionFolderUrl={onGetSessionFolderUrl}
                 />
               </div>
             </>

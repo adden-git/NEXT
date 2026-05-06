@@ -27,6 +27,7 @@ type SessionFilesPanelProps = {
     path?: string,
   ) => Promise<SessionFileEntry[]>;
   onGetSessionFileUrl?: (sessionId: string, path: string) => string;
+  onGetSessionFolderUrl?: (sessionId: string, path: string) => string;
 };
 
 const FILE_SIZE_UNITS = ["B", "KB", "MB", "GB", "TB"];
@@ -72,6 +73,7 @@ export function SessionFilesPanel({
   onClose,
   onListSessionDirectory,
   onGetSessionFileUrl,
+  onGetSessionFolderUrl,
 }: SessionFilesPanelProps) {
   const [currentPath, setCurrentPath] = useState(".");
   const [entries, setEntries] = useState<SessionFileEntry[]>([]);
@@ -288,15 +290,28 @@ export function SessionFilesPanel({
                     </div>
 
                     {isDirectory ? (
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon-xs"
-                        onClick={() => handleOpenDirectory(itemPath)}
-                        aria-label={`Open directory ${entry.name}`}
-                      >
-                        <ChevronRightIcon className="size-3.5" />
-                      </Button>
+                      <div className="flex items-center gap-1">
+                        {onGetSessionFolderUrl ? (
+                          <Button asChild variant="ghost" size="icon-xs">
+                            <a
+                              href={onGetSessionFolderUrl(sessionId, itemPath)}
+                              download={`${entry.name}.zip`}
+                              aria-label={`Download ${entry.name}`}
+                            >
+                              <DownloadIcon className="size-3.5" />
+                            </a>
+                          </Button>
+                        ) : null}
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon-xs"
+                          onClick={() => handleOpenDirectory(itemPath)}
+                          aria-label={`Open directory ${entry.name}`}
+                        >
+                          <ChevronRightIcon className="size-3.5" />
+                        </Button>
+                      </div>
                     ) : onGetSessionFileUrl ? (
                       <Button asChild variant="ghost" size="icon-xs">
                         <a

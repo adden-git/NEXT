@@ -80,6 +80,8 @@ type UseSessionsReturn = {
   getSessionFile: (sessionId: string, path: string) => Promise<Blob>;
   /** Get the URL for a session file (for direct access/download) */
   getSessionFileUrl: (sessionId: string, path: string) => string;
+  /** Get the URL for downloading a session folder as ZIP */
+  getSessionFolderUrl: (sessionId: string, path: string) => string;
   /** Fetch available work directories */
   fetchWorkDirs: () => Promise<string[]>;
   /** Fetch the startup directory */
@@ -645,6 +647,19 @@ export function useSessions(): UseSessionsReturn {
   );
 
   /**
+   * Get the URL for downloading a session folder as ZIP
+   */
+  const getSessionFolderUrl = useCallback(
+    (sessionId: string, path: string): string => {
+      const basePath = getApiBaseUrl();
+      const token = getAuthToken();
+      const tokenParam = token ? `?token=${encodeURIComponent(token)}` : "";
+      return `${basePath}/api/sessions/${encodeURIComponent(sessionId)}/folders/${encodeURIComponent(path)}${tokenParam}`;
+    },
+    [],
+  );
+
+  /**
    * Fetch available work directories from the backend
    */
   const fetchWorkDirs = useCallback(async (): Promise<string[]> => {
@@ -1091,6 +1106,7 @@ export function useSessions(): UseSessionsReturn {
     listSessionDirectory,
     getSessionFile,
     getSessionFileUrl,
+    getSessionFolderUrl,
     fetchWorkDirs,
     fetchStartupDir,
     renameSession,

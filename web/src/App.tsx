@@ -101,6 +101,7 @@ function App() {
     uploadSessionFile,
     getSessionFile,
     getSessionFileUrl,
+    getSessionFolderUrl,
     listSessionDirectory,
     refreshSession,
     refreshSessions,
@@ -446,6 +447,7 @@ function App() {
       uploadSessionFile={uploadSessionFile}
       onListSessionDirectory={listSessionDirectory}
       onGetSessionFileUrl={getSessionFileUrl}
+      onGetSessionFolderUrl={getSessionFolderUrl}
       onGetSessionFile={getSessionFile}
       onOpenCreateDialog={handleOpenCreateDialog}
       onOpenSidebar={handleOpenMobileSidebar}

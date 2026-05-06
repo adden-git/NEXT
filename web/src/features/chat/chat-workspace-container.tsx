@@ -47,6 +47,7 @@ type ChatWorkspaceContainerProps = {
     path?: string,
   ) => Promise<SessionFileEntry[]>;
   onGetSessionFileUrl?: (sessionId: string, path: string) => string;
+  onGetSessionFolderUrl?: (sessionId: string, path: string) => string;
   onGetSessionFile?: (sessionId: string, path: string) => Promise<Blob>;
   onOpenCreateDialog?: () => void;
   onOpenSidebar?: () => void;
@@ -64,6 +65,7 @@ export function ChatWorkspaceContainer({
   uploadSessionFile,
   onListSessionDirectory,
   onGetSessionFileUrl,
+  onGetSessionFolderUrl,
   onGetSessionFile,
   onOpenCreateDialog,
   onOpenSidebar,
@@ -384,6 +386,7 @@ export function ChatWorkspaceContainer({
       isAwaitingFirstResponse={isAwaitingFirstResponse}
       onListSessionDirectory={onListSessionDirectory}
       onGetSessionFileUrl={onGetSessionFileUrl}
+      onGetSessionFolderUrl={onGetSessionFolderUrl}
       onGetSessionFile={onGetSessionFile}
       onOpenSidebar={onOpenSidebar}
       onRenameSession={onRenameSession}
