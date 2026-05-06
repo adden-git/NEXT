@@ -78,7 +78,9 @@ cd next && python run.py
 | `/api/sessions/{id}` | DELETE | Удаление сессии |
 | `/api/sessions/{id}/stream` | WS | WebSocket поток сообщений (JSON-RPC) |
 | `/api/sessions/{id}/cancel` | POST | Отмена текущего prompt |
-| `/api/sessions/{id}/upload` | POST | Загрузка файлов в сессию |
+| `/api/sessions/{id}/upload` | POST | Загрузка файлов в сессию (max 100MB) |
+| `/api/sessions/{id}/files/{path}` | GET | Чтение файла или список директории |
+| `/api/sessions/{id}/folders/{path}` | GET | Скачать директорию как ZIP (max 500MB) |
 | `/api/sessions/{id}/title` | POST | Генерация заголовка по содержимому |
 | `/api/sessions/{id}/fork` | POST | Форк сессии с копией контекста |
 | `/api/sessions/{id}/export` | GET | Экспорт сессии (wire.jsonl) |
@@ -249,7 +251,13 @@ model = "claude-3-5-sonnet-20241022"
 - **CORS**: configurable allowed origins
 - **LAN-only mode**: доступ только из private сетей
 - **Restrict sensitive APIs**: в публичном режиме файловый менеджер и SSH могут быть отключены
-- **Input validation**: Pydantic models на всех endpoints
+- **Path traversal protection**: `resolve()` + `is_relative_to()` на всех file endpoints
+- **Symlink blocking**: `followlinks=False` в `os.walk`, symlink detection в public mode
+- **Size limits**: upload 100MB, file read 50MB (streamed), ZIP 500MB, uploaded file processing 20MB
+- **Name sanitization**: `sanitize_filename()` на всех user-provided filenames
+- **Work dir restriction**: создание директорий только внутри `$HOME`
+- **Template injection protection**: валидация `{}` и `/` в `create_instruction_file`
+- **Credential storage**: `web_users.json` с `chmod 600`
 
 ## Разработка
 
