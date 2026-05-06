@@ -551,11 +551,23 @@ export function SettingsDialog() {
                       if (cfg.providers["fireworks"]) { toast.error("Fireworks уже добавлен"); return; }
                       setCfg((prev) => {
                         if (!prev) return prev;
-                        const next = { ...prev, providers: { ...prev.providers, fireworks: { type: "openai_legacy", base_url: "https://api.fireworks.ai/inference/v1", api_key: "" } } };
+                        const nextProviders = { ...prev.providers, fireworks: { type: "openai_legacy", base_url: "https://api.fireworks.ai/inference/v1", api_key: "" } };
+                        const nextModels = { ...prev.models };
+                        const fireworksModels: Record<string, { provider: string; model: string; max_context_size: number; capabilities: string[]; display_name: string }> = {
+                          "llama-3.2-3b": { provider: "fireworks", model: "accounts/fireworks/models/llama-v3p2-3b-instruct", max_context_size: 131072, capabilities: [], display_name: "Llama 3.2 3B" },
+                          "llama-3.1-8b": { provider: "fireworks", model: "accounts/fireworks/models/llama-v3p1-8b-instruct", max_context_size: 131072, capabilities: [], display_name: "Llama 3.1 8B" },
+                          "qwen-2.5-7b": { provider: "fireworks", model: "accounts/fireworks/models/qwen2p5-7b-instruct", max_context_size: 32768, capabilities: [], display_name: "Qwen2.5 7B" },
+                          "deepseek-v3": { provider: "fireworks", model: "accounts/fireworks/models/deepseek-v3", max_context_size: 65536, capabilities: [], display_name: "DeepSeek V3" },
+                        };
+                        for (const [k, v] of Object.entries(fireworksModels)) {
+                          if (!nextModels[k]) nextModels[k] = v;
+                        }
+                        const next = { ...prev, providers: nextProviders, models: nextModels };
                         cfgRef.current = next;
                         return next;
                       });
                       markDirty();
+                      toast.success("Fireworks добавлен", { description: "Добавлено 4 модели: Llama 3.2 3B, Llama 3.1 8B, Qwen2.5 7B, DeepSeek V3" });
                     }}>+ Fireworks</Button>
                   </div>
                 </div>
