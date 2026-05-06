@@ -267,7 +267,7 @@ def list_users(authorization: str = Header(default=""), db: Session = Depends(ge
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
 
-    users = db.query(User).all()
+    users = db.query(User).filter(User.id != user.id).order_by(User.role.desc(), User.created_at.desc()).all()
     return [
         AdminUserOut(
             id=u.id,
