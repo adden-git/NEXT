@@ -158,6 +158,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         if not path.startswith("/api/"):
             return await call_next(request)
+        # Allow auth endpoints without session token
+        if path.startswith("/api/auth/"):
+            return await call_next(request)
 
         if self._enforce_origin:
             origin = request.headers.get("origin")
