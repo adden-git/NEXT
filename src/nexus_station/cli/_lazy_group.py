@@ -18,7 +18,7 @@ class LazySubcommandGroup(typer.core.TyperGroup):
         "export": ("nexus_station.cli.export", "cli", "Export session data."),
         "mcp": ("nexus_station.cli.mcp", "cli", "Manage MCP server configurations."),
         "plugin": ("nexus_station.cli.plugin", "cli", "Manage plugins."),
-        "vis": ("nexus_station.cli.vis", "cli", "Run Kimi Agent Tracing Visualizer."),
+        "vis": ("nexus_station.cli.vis", "cli", "Run NEXUS Agent Tracing Visualizer."),
         "web": ("nexus_station.cli.web", "cli", "Run NEXUS Station web interface."),
     }
     lazy_command_order: tuple[str, ...] = (

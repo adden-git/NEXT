@@ -18,10 +18,6 @@ class HookResult:
     stderr: str = ""
     exit_code: int = 0
     timed_out: bool = False
-    # Risk level from guardian AI (low / medium / high / critical)
-    risk: str = ""
-    # Structured data from hook (e.g. guardian JSON response)
-    data: dict[str, Any] | None = None
 
 
 async def run_hook(

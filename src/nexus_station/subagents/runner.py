@@ -15,7 +15,7 @@ from nexus_station.approval_runtime import (
     set_current_approval_source,
 )
 from nexus_station.soul import MaxStepsReached, RunCancelled, UILoopFn, get_wire_or_none, run_soul
-from nexus_station.soul.nexussoul import NexusSoul
+from nexus_station.soul.kimisoul import KimiSoul
 from nexus_station.soul.toolset import get_current_tool_call_or_none
 from nexus_station.subagents.builder import SubagentBuilder
 from nexus_station.subagents.core import SubagentRunSpec, prepare_soul
@@ -63,7 +63,7 @@ class SoulRunFailure:
 
 
 async def run_soul_checked(
-    soul: NexusSoul,
+    soul: KimiSoul,
     prompt: str,
     ui_loop_fn: UILoopFn,
     wire_path: Path,
@@ -140,7 +140,7 @@ async def run_soul_checked(
 
 
 async def run_with_summary_continuation(
-    soul: NexusSoul,
+    soul: KimiSoul,
     prompt: str,
     ui_loop_fn: UILoopFn,
     wire_path: Path,

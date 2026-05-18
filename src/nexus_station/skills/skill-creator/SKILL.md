@@ -205,7 +205,7 @@ first existing directory in priority order. Built-in skills only load for LocalK
 
 **User level** (by priority):
 - `~/.config/agents/skills/` (recommended)
-- `~/.nexus/skills/`
+- `~/.kimi/skills/`
 - `~/.claude/skills/`
 
 **Project level**:

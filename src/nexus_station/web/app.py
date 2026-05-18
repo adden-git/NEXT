@@ -27,12 +27,9 @@ from nexus_station.utils.server import (
     is_local_host,
 )
 from nexus_station.web.api import (
-    auth_router,
     config_router,
-    files_router,
     open_in_router,
     sessions_router,
-    ssh_router,
     work_dirs_router,
 )
 from nexus_station.web.auth import (
@@ -41,7 +38,7 @@ from nexus_station.web.auth import (
     is_private_ip,
     normalize_allowed_origins,
 )
-from nexus_station.web.runner.process import NexusCLIRunner
+from nexus_station.web.runner.process import KimiCLIRunner
 
 # Configure logging based on LOG_LEVEL environment variable
 _log_level = os.environ.get("LOG_LEVEL", "WARNING").upper()
@@ -123,7 +120,7 @@ def create_app(
     max_public_path_depth: int | None = None,
     lan_only: bool | None = None,
 ) -> FastAPI:
-    """Create the FastAPI application for Kimi CLI web UI."""
+    """Create the FastAPI application for NEXUS CLI web UI."""
 
     env_token = os.environ.get(ENV_SESSION_TOKEN) or None
     env_origins = normalize_allowed_origins(os.environ.get(ENV_ALLOWED_ORIGINS))
@@ -156,8 +153,8 @@ def create_app(
         app.state.max_public_path_depth = max_public_path_depth
         app.state.lan_only = lan_only
 
-        # Start NexusCLI runner
-        runner = NexusCLIRunner()
+        # Start KimiCLI runner
+        runner = KimiCLIRunner()
         app.state.runner = runner
         runner.start()
 
@@ -202,10 +199,7 @@ def create_app(
     # CORS middleware for local development
     application.add_middleware(cast(Any, CORSMiddleware), **cors_kwargs)
 
-    application.include_router(auth_router)
     application.include_router(config_router)
-    application.include_router(files_router)
-    application.include_router(ssh_router)
     application.include_router(sessions_router)
     application.include_router(work_dirs_router)
     if not restrict_sensitive_apis:
@@ -241,7 +235,6 @@ def run_web_server(
     dangerously_omit_auth: bool = False,
     restrict_sensitive_apis: bool | None = None,
     lan_only: bool = True,
-    dynamic_auth: bool = False,
 ) -> None:
     """Run the web server."""
     import sys
@@ -279,7 +272,7 @@ def run_web_server(
         session_token = None
     elif auth_token:
         session_token = auth_token
-    elif public_mode and not dynamic_auth:
+    elif public_mode:
         session_token = secrets.token_urlsafe(32)
     else:
         session_token = None
@@ -452,8 +445,6 @@ def run_web_server(
         reload=reload,
         log_level="info",
         timeout_graceful_shutdown=3,
-        loop="uvloop",
-        http="httptools",
     )
 
 

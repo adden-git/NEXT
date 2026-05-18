@@ -8,7 +8,7 @@ from kosong.message import Message, TextPart
 from nexus_station.soul.dynamic_injection import DynamicInjection, DynamicInjectionProvider
 
 if TYPE_CHECKING:
-    from nexus_station.soul.nexussoul import NexusSoul
+    from nexus_station.soul.kimisoul import KimiSoul
 
 # Inject a reminder every N assistant turns.
 _TURN_INTERVAL = 5
@@ -30,8 +30,14 @@ class PlanModeInjectionProvider(DynamicInjectionProvider):
     async def get_injections(
         self,
         history: Sequence[Message],
-        soul: NexusSoul,
+        soul: KimiSoul,
     ) -> list[DynamicInjection]:
+        # Plan-mode workflow reminders are root-only. Subagents share the
+        # session's plan_mode flag for persistence/resume, but their YAMLs
+        # usually exclude EnterPlanMode/ExitPlanMode, so do not inject this
+        # workflow guidance into subagent contexts.
+        if soul.is_subagent:
+            return []
         if not soul.plan_mode:
             self._inject_count = 0
             return []

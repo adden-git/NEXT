@@ -27,7 +27,7 @@ from nexus_station.background import list_task_views
 from nexus_station.llm import model_display_name
 from nexus_station.notifications import NotificationManager, NotificationWatcher
 from nexus_station.soul import LLMNotSet, LLMNotSupported, MaxStepsReached, RunCancelled, Soul, run_soul
-from nexus_station.soul.nexussoul import FLOW_COMMAND_PREFIX, NexusSoul
+from nexus_station.soul.kimisoul import FLOW_COMMAND_PREFIX, KimiSoul
 from nexus_station.ui.shell import update as _update_mod
 from nexus_station.ui.shell.console import console
 from nexus_station.ui.shell.echo import render_user_echo_text
@@ -102,7 +102,7 @@ class _BackgroundCompletionWatcher:
         self._event: asyncio.Event | None = None
         self._notifications: NotificationManager | None = None
         self._can_auto_trigger_pending = can_auto_trigger_pending or (lambda: True)
-        if isinstance(soul, NexusSoul):
+        if isinstance(soul, KimiSoul):
             self._event = soul.runtime.background_tasks.completion_event
             self._notifications = soul.runtime.notifications
 
@@ -200,20 +200,42 @@ class Shell:
         self._current_prompt_approval_request: ApprovalRequest | None = None
         self._approval_modal: ApprovalPromptDelegate | None = None
         self._exit_after_run = False
+        soul_slash_commands = list(soul.available_slash_commands)
+        shell_slash_commands = shell_slash_registry.list_commands()
         self._available_slash_commands: dict[str, SlashCommand[Any]] = {
-            **{cmd.name: cmd for cmd in soul.available_slash_commands},
-            **{cmd.name: cmd for cmd in shell_slash_registry.list_commands()},
+            **{cmd.name: cmd for cmd in soul_slash_commands},
+            **{cmd.name: cmd for cmd in shell_slash_commands},
         }
-        """Shell-level slash commands + soul-level slash commands. Name to command mapping."""
+        """Shell-level slash commands + soul-level slash commands. Primary name mapping."""
+        self._available_slash_command_index = self._index_slash_commands(
+            [*soul_slash_commands, *shell_slash_commands]
+        )
+        """Shell-level slash commands + soul-level slash commands.
+        Primary name and alias mapping.
+        """
 
     @property
     def available_slash_commands(self) -> dict[str, SlashCommand[Any]]:
         """Get all available slash commands, including shell-level and soul-level commands."""
         return self._available_slash_commands
 
+    @staticmethod
+    def _index_slash_commands(commands: list[SlashCommand[Any]]) -> dict[str, SlashCommand[Any]]:
+        indexed: dict[str, SlashCommand[Any]] = {}
+        for command in commands:
+            indexed[command.name] = command
+            for alias in command.aliases:
+                indexed[alias] = command
+        return indexed
+
+    def _find_available_slash_command(self, name: str) -> SlashCommand[Any] | None:
+        return self._available_slash_command_index.get(name) or self._available_slash_commands.get(
+            name
+        )
+
     def _print_cwd_lost_crash(self) -> None:
         """Print a crash report when the working directory is no longer accessible."""
-        runtime = self.soul.runtime if isinstance(self.soul, NexusSoul) else None
+        runtime = self.soul.runtime if isinstance(self.soul, KimiSoul) else None
         session_id = runtime.session.id if runtime else "unknown"
         work_dir = str(runtime.session.work_dir) if runtime else "unknown"
 
@@ -281,6 +303,7 @@ class Shell:
     @staticmethod
     def _echo_agent_input(user_input: UserInput) -> None:
         console.print(render_user_echo_text(user_input.command))
+        console.print()
 
     def _bind_running_input(
         self,
@@ -359,7 +382,7 @@ class Shell:
         _run_start_time = time.monotonic()
 
         # Initialize theme from config
-        if isinstance(self.soul, NexusSoul):
+        if isinstance(self.soul, KimiSoul):
             from nexus_station.ui.theme import set_active_theme
 
             set_active_theme(self.soul.runtime.config.theme)
@@ -367,7 +390,7 @@ class Shell:
         if command is not None:
             # run single command and exit
             logger.info("Running agent with command: {command}", command=command)
-            if isinstance(self.soul, NexusSoul):
+            if isinstance(self.soul, KimiSoul):
                 self._start_background_task(self._watch_root_wire_hub())
             try:
                 return await self.run_soul_command(command)
@@ -390,7 +413,7 @@ class Shell:
             _telemetry_sink.start_periodic_flush()
             self._start_background_task(_telemetry_sink.retry_disk_events())
 
-        if isinstance(self.soul, NexusSoul):
+        if isinstance(self.soul, KimiSoul):
             watcher = NotificationWatcher(
                 self.soul.runtime.notifications,
                 sink="shell",
@@ -411,12 +434,12 @@ class Shell:
             await self.soul.start_background_mcp_loading()
 
         async def _plan_mode_toggle() -> bool:
-            if isinstance(self.soul, NexusSoul):
+            if isinstance(self.soul, KimiSoul):
                 return await self.soul.toggle_plan_mode_from_manual()
             return False
 
         def _mcp_status_block(columns: int):
-            if not isinstance(self.soul, NexusSoul):
+            if not isinstance(self.soul, KimiSoul):
                 return None
             snapshot = self.soul.status.mcp_status
             if snapshot is None:
@@ -424,7 +447,7 @@ class Shell:
             return render_mcp_prompt(snapshot)
 
         def _mcp_status_loading() -> bool:
-            if not isinstance(self.soul, NexusSoul):
+            if not isinstance(self.soul, KimiSoul):
                 return False
             snapshot = self.soul.status.mcp_status
             return bool(snapshot and snapshot.loading)
@@ -437,7 +460,7 @@ class Shell:
         _bg_cache = _BgCountCache()
 
         def _bg_task_counts() -> BgTaskCounts:
-            if not isinstance(self.soul, NexusSoul):
+            if not isinstance(self.soul, KimiSoul):
                 return BgTaskCounts()
             now = time.monotonic()
             if now - _bg_cache.time < 1.0:
@@ -458,14 +481,14 @@ class Shell:
             model_name=model_display_name(
                 self.soul.model_name,
                 self.soul.runtime.llm.model_config
-                if isinstance(self.soul, NexusSoul) and self.soul.runtime.llm
+                if isinstance(self.soul, KimiSoul) and self.soul.runtime.llm
                 else None,
             ),
             thinking=self.soul.thinking or False,
             agent_mode_slash_commands=list(self._available_slash_commands.values()),
             shell_mode_slash_commands=shell_mode_registry.list_commands(),
             editor_command_provider=lambda: (
-                self.soul.runtime.config.default_editor if isinstance(self.soul, NexusSoul) else ""
+                self.soul.runtime.config.default_editor if isinstance(self.soul, KimiSoul) else ""
             ),
             plan_mode_toggle_callback=_plan_mode_toggle,
         ) as prompt_session:
@@ -473,7 +496,7 @@ class Shell:
             if self._prefill_text:
                 prompt_session.set_prefill_text(self._prefill_text)
                 self._prefill_text = None
-            if isinstance(self.soul, NexusSoul):
+            if isinstance(self.soul, KimiSoul):
                 kimi_soul = self.soul
                 snapshot = kimi_soul.status.mcp_status
                 if snapshot and snapshot.loading:
@@ -620,10 +643,7 @@ class Shell:
                         else str(user_input)
                     )
                     action = classify_input(input_text, is_streaming=False)
-                    if action.kind == InputAction.BTW and isinstance(self.soul, NexusSoul):
-                        from nexus_station.telemetry import track
-
-                        track("input_btw")
+                    if action.kind == InputAction.BTW and isinstance(self.soul, KimiSoul):
                         await self._run_btw_modal(action.args, prompt_session)
                         resume_prompt.set()
                         continue
@@ -633,14 +653,16 @@ class Shell:
                         continue
 
                     if slash_cmd_call := self._agent_slash_command_call(user_input):
+                        available_command = self._find_available_slash_command(slash_cmd_call.name)
                         is_soul_slash = (
-                            slash_cmd_call.name in self._available_slash_commands
+                            available_command is not None
                             and shell_slash_registry.find_command(slash_cmd_call.name) is None
                         )
                         if is_soul_slash:
                             from nexus_station.telemetry import track
 
-                            track("input_command", command=slash_cmd_call.name)
+                            assert available_command is not None
+                            track("input_command", command=available_command.name)
                             background_autotrigger_armed = True
                             resume_prompt.set()
                             await self.run_soul_command(slash_cmd_call.raw_input)
@@ -754,7 +776,8 @@ class Shell:
         from nexus_station.cli import Reload, SwitchToVis, SwitchToWeb
         from nexus_station.telemetry import track
 
-        if command_call.name not in self._available_slash_commands:
+        available_command = self._find_available_slash_command(command_call.name)
+        if available_command is None:
             logger.info("Unknown slash command /{command}", command=command_call.name)
             track("input_command_invalid")
             console.print(
@@ -763,7 +786,7 @@ class Shell:
             )
             return
 
-        track("input_command", command=command_call.name)
+        track("input_command", command=available_command.name)
 
         command = shell_slash_registry.find_command(command_call.name)
         if command is None:
@@ -821,7 +844,7 @@ class Shell:
 
         try:
             snap = self.soul.status
-            runtime = self.soul.runtime if isinstance(self.soul, NexusSoul) else None
+            runtime = self.soul.runtime if isinstance(self.soul, KimiSoul) else None
             show_thinking_stream = runtime.config.show_thinking_stream if runtime else False
             # Capture view reference via closure — _clear_active_view sets
             # _active_view=None inside visualize()'s finally (before run_soul
@@ -846,7 +869,7 @@ class Shell:
                     ),
                     cancel_event=cancel_event,
                     prompt_session=self._prompt_session,
-                    steer=self.soul.steer if isinstance(self.soul, NexusSoul) else None,
+                    steer=self.soul.steer if isinstance(self.soul, KimiSoul) else None,
                     btw_runner=self._make_btw_runner(),
                     bind_running_input=self._bind_running_input,
                     unbind_running_input=self._unbind_running_input,
@@ -885,6 +908,7 @@ class Shell:
                     break
                 queued = pending.pop(0)
                 console.print(render_user_echo_text(queued.command))
+                console.print()
                 await run_soul(
                     self.soul,
                     queued.content,
@@ -898,7 +922,7 @@ class Shell:
                         ),
                         cancel_event=cancel_event,
                         prompt_session=self._prompt_session,
-                        steer=self.soul.steer if isinstance(self.soul, NexusSoul) else None,
+                        steer=self.soul.steer if isinstance(self.soul, KimiSoul) else None,
                         btw_runner=self._make_btw_runner(),
                         bind_running_input=self._bind_running_input,
                         unbind_running_input=self._unbind_running_input,
@@ -982,12 +1006,6 @@ class Shell:
             )
         except RunCancelled:
             logger.info("Cancelled by user")
-            from nexus_station.telemetry import track
-
-            _at_step = (
-                getattr(self.soul, "_current_step_no", 0) if isinstance(self.soul, NexusSoul) else 0
-            )
-            track("turn_interrupted", at_step=_at_step)
             console.print("[red]Interrupted by user[/red]")
         except Exception as e:
             logger.exception("Unexpected error:")
@@ -1067,7 +1085,7 @@ class Shell:
         return _PromptEvent(kind="input_activity")
 
     async def _watch_root_wire_hub(self) -> None:
-        if not isinstance(self.soul, NexusSoul):
+        if not isinstance(self.soul, KimiSoul):
             return
         if self.soul.runtime.root_wire_hub is None:
             return
@@ -1086,7 +1104,7 @@ class Shell:
             self.soul.runtime.root_wire_hub.unsubscribe(queue)
 
     async def _handle_root_hub_message(self, msg: WireMessage) -> None:
-        if not isinstance(self.soul, NexusSoul):
+        if not isinstance(self.soul, KimiSoul):
             return
         match msg:
             case ApprovalRequest() as request:
@@ -1125,7 +1143,7 @@ class Shell:
                 return
 
     def _enrich_approval_request_for_ui(self, request: ApprovalRequest) -> ApprovalRequest:
-        if not isinstance(self.soul, NexusSoul):
+        if not isinstance(self.soul, KimiSoul):
             return request
         if request.agent_id is None:
             return request
@@ -1153,7 +1171,7 @@ class Shell:
             _BtwModalDelegate,  # pyright: ignore[reportPrivateUsage]
         )
 
-        assert isinstance(self.soul, NexusSoul)
+        assert isinstance(self.soul, KimiSoul)
 
         dismiss_event = asyncio.Event()
         modal = _BtwModalDelegate(on_dismiss=lambda: dismiss_event.set())
@@ -1234,7 +1252,7 @@ class Shell:
 
     def _make_btw_runner(self):
         """Create a btw_runner callback bound to the current soul."""
-        if not isinstance(self.soul, NexusSoul):
+        if not isinstance(self.soul, KimiSoul):
             return None
 
         soul = self.soul
@@ -1260,7 +1278,7 @@ class Shell:
         while self._pending_approval_requests:
             request = self._pending_approval_requests.popleft()
 
-            if not isinstance(self.soul, NexusSoul) or self.soul.runtime.approval_runtime is None:
+            if not isinstance(self.soul, KimiSoul) or self.soul.runtime.approval_runtime is None:
                 break
             record = self.soul.runtime.approval_runtime.get_request(request.id)
             if record is None or record.status != "pending":
@@ -1273,7 +1291,7 @@ class Shell:
         # Re-queue any approval requests that were forwarded to the sink
         # but not yet resolved.  Without this, those requests would be
         # silently lost when the live view closes between turns.
-        if not isinstance(self.soul, NexusSoul) or self.soul.runtime.approval_runtime is None:
+        if not isinstance(self.soul, KimiSoul) or self.soul.runtime.approval_runtime is None:
             return
         for record in self.soul.runtime.approval_runtime.list_pending():
             self._queue_approval_request(
@@ -1304,7 +1322,7 @@ class Shell:
             try:
                 response = await request.wait()
                 if (
-                    isinstance(self.soul, NexusSoul)
+                    isinstance(self.soul, KimiSoul)
                     and self.soul.runtime.approval_runtime is not None
                 ):
                     self.soul.runtime.approval_runtime.resolve(
@@ -1349,7 +1367,7 @@ class Shell:
             while self._pending_approval_requests:
                 request = self._pending_approval_requests.popleft()
 
-                if not isinstance(self.soul, NexusSoul):
+                if not isinstance(self.soul, KimiSoul):
                     break
                 if self.soul.runtime.approval_runtime is None:
                     break
@@ -1395,7 +1413,7 @@ class Shell:
         response: ApprovalResponse.Kind,
         feedback: str = "",
     ) -> None:
-        if not isinstance(self.soul, NexusSoul):
+        if not isinstance(self.soul, KimiSoul):
             return
         if self.soul.runtime.approval_runtime is None:
             return
@@ -1404,7 +1422,7 @@ class Shell:
         self._activate_prompt_approval_modal()
 
     def _pop_next_pending_approval_request(self) -> ApprovalRequest | None:
-        if not isinstance(self.soul, NexusSoul) or self.soul.runtime.approval_runtime is None:
+        if not isinstance(self.soul, KimiSoul) or self.soul.runtime.approval_runtime is None:
             return None
         while self._pending_approval_requests:
             request = self._pending_approval_requests.popleft()

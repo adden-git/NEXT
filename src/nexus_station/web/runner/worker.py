@@ -1,7 +1,7 @@
-"""Worker module for running NexusCLI in a subprocess.
+"""Worker module for running KimiCLI in a subprocess.
 
-This module is the entry point for the subprocess that runs NexusCLI in wire mode.
-It reads the session configuration from disk and runs NexusCLI.run_wire_stdio().
+This module is the entry point for the subprocess that runs KimiCLI in wire mode.
+It reads the session configuration from disk and runs KimiCLI.run_wire_stdio().
 
 Usage:
     python -m nexus_station.web.runner.worker <session_id>
@@ -16,20 +16,20 @@ from typing import Any
 from uuid import UUID
 
 from nexus_station import logger
-from nexus_station.app import NexusCLI, enable_logging
+from nexus_station.app import KimiCLI, enable_logging
 from nexus_station.cli.mcp import get_global_mcp_config_file
 from nexus_station.exception import MCPConfigError
 from nexus_station.web.store.sessions import load_session_by_id
 
 
 async def run_worker(session_id: UUID) -> None:
-    """Run the NexusCLI worker for a session."""
+    """Run the KimiCLI worker for a session."""
     # Find session by ID using the web store
     joint_session = load_session_by_id(session_id)
     if joint_session is None:
         raise ValueError(f"Session not found: {session_id}")
 
-    # Get the nexus-station session object
+    # Get the kimi-cli session object
     session = joint_session.nexus_station_session
 
     # Load default MCP config file if it exists
@@ -49,9 +49,9 @@ async def run_worker(session_id: UUID) -> None:
     # vs a brand-new session that should honor config.default_plan_mode.
     resumed = (session.dir / "state.json").exists()
 
-    # Create NexusCLI instance with MCP configuration
+    # Create KimiCLI instance with MCP configuration
     try:
-        nexus_station = await NexusCLI.create(
+        nexus_station = await KimiCLI.create(
             session, mcp_configs=mcp_configs or None, resumed=resumed, ui_mode="wire"
         )
     except MCPConfigError as exc:
@@ -60,7 +60,7 @@ async def run_worker(session_id: UUID) -> None:
             path=default_mcp_file,
             error=exc,
         )
-        nexus_station = await NexusCLI.create(session, mcp_configs=None, resumed=resumed, ui_mode="wire")
+        nexus_station = await KimiCLI.create(session, mcp_configs=None, resumed=resumed, ui_mode="wire")
 
     # Run in wire stdio mode
     await nexus_station.run_wire_stdio()
@@ -72,7 +72,7 @@ def main() -> None:
     from nexus_station.utils.proxy import normalize_proxy_env
 
     normalize_proxy_env()
-    set_process_title("nexus-code-worker")
+    set_process_title("kimi-code-worker")
 
     if len(sys.argv) < 2:
         print("Usage: python -m nexus_station.web.runner.worker <session_id>", file=sys.stderr)
@@ -85,9 +85,7 @@ def main() -> None:
         sys.exit(1)
 
     # Enable logging for the subprocess
-    # redirect_stderr=False so errors appear in the real stderr pipe
-    # and the parent process can capture them instead of seeing "No stderr".
-    enable_logging(debug=False, redirect_stderr=False)
+    enable_logging(debug=False)
 
     # Run the async worker
     asyncio.run(run_worker(session_id))

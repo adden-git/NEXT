@@ -10,7 +10,7 @@ from nexus_station.auth.oauth import login_kimi_code, logout_kimi_code
 from nexus_station.auth.platforms import is_managed_provider_key, parse_managed_provider_key
 from nexus_station.cli import Reload
 from nexus_station.config import save_config
-from nexus_station.soul.nexussoul import NexusSoul
+from nexus_station.soul.kimisoul import KimiSoul
 from nexus_station.ui.shell.console import console
 from nexus_station.ui.shell.setup import select_platform, setup_platform
 from nexus_station.ui.shell.slash import ensure_kimi_soul, registry
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from nexus_station.ui.shell import Shell
 
 
-async def _login_kimi_code(soul: NexusSoul) -> bool:
+async def _login_kimi_code(soul: KimiSoul) -> bool:
     status: Status | None = None
     ok = True
     try:
@@ -48,7 +48,7 @@ async def _login_kimi_code(soul: NexusSoul) -> bool:
     return ok
 
 
-def current_model_key(soul: NexusSoul) -> str | None:
+def current_model_key(soul: KimiSoul) -> str | None:
     config = soul.runtime.config
     curr_model_cfg = soul.runtime.llm.model_config if soul.runtime.llm else None
     if curr_model_cfg is not None:

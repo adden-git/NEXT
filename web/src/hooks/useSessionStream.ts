@@ -1331,6 +1331,17 @@ export function useSessionStream(
             }
           }
 
+          // Also extract data-URI images from markdown strings in legacy output
+          if (typeof return_value.output === "string") {
+            const dataUriRegex = /!\[.*?\]\((data:image\/(?:png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]+)\)/g;
+            for (const match of return_value.output.matchAll(dataUriRegex)) {
+              const url = match[1];
+              if (url && !mediaParts.some((p) => p.url === url)) {
+                mediaParts.push({ type: "image_url", url });
+              }
+            }
+          }
+
           const messageStr = return_value.message;
 
           if (tc) {

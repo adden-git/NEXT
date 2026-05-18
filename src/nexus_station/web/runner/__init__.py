@@ -1,5 +1,5 @@
-"""Kimi CLI session runner."""
+"""NEXUS CLI session runner."""
 
-from nexus_station.web.runner.process import NexusCLIRunner
+from nexus_station.web.runner.process import KimiCLIRunner
 
-__all__ = ["NexusCLIRunner"]
+__all__ = ["KimiCLIRunner"]

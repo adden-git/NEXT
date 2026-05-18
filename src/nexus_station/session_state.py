@@ -25,15 +25,6 @@ class TodoItemState(BaseModel):
     status: Literal["pending", "in_progress", "done"]
 
 
-class ModelParams(BaseModel):
-    """Per-session model generation parameters."""
-
-    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
-    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
-    max_tokens: int | None = Field(default=None, ge=1, le=200_000)
-    thinking_keep: str | None = Field(default=None)
-
-
 class SessionState(BaseModel):
     version: int = 1
     approval: ApprovalStateData = Field(default_factory=ApprovalStateData)
@@ -51,13 +42,6 @@ class SessionState(BaseModel):
     auto_archive_exempt: bool = False
     # Todo list state
     todos: list[TodoItemState] = Field(default_factory=list)  # pyright: ignore[reportUnknownVariableType]
-    # Per-session model parameters (override global env)
-    model_params: ModelParams | None = Field(default=None)
-    # Guardian AI dual-check settings
-    guardian_enabled: bool = Field(default=False)
-    guardian_model: str | None = Field(default=None)
-    # Forbidden files/patterns — guardian will block any tool touching these
-    forbidden_files: list[str] = Field(default_factory=list)
 
 
 _LEGACY_METADATA_FILENAME = "metadata.json"

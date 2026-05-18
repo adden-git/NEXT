@@ -11,6 +11,34 @@ Only write entries that are worth mentioning to users.
 
 ## Unreleased
 
+## 1.44.0 (2026-05-13)
+
+- Shell: Add slash command alias resolution — aliases such as `/h`, `?`, and `status` now resolve to their canonical commands (`/help`, `/usage`); the completer and help output display alias matches as `/name (alias)` for clarity
+- Shell: Fix `/usage` alias registration — the alias was incorrectly stored as `"/status"` instead of `"status"`, causing alias lookup to fail
+
+## 1.43.0 (2026-05-12)
+
+- Security: Bump pillow to 12.2.0 to address CVE-2026-25990 (out-of-bounds write when loading PSD images); unblocks installs in environments that gate on the older pinned version
+- Shell: Fix missing visual spacing in the shell UI — add blank lines after user input echoes, content blocks, tool call results, notifications, error panels, and steer inputs so consecutive elements no longer collapse together
+- Shell: Restore markdown link highlighting (bright blue underlined text and cyan underlined URLs) and add underline separators to h2-h6 headings; adjust table rendering to use square box borders with visible edges
+- Core: Include completion timestamp and elapsed duration in background task terminal notifications, and add `finished_at` and `duration_s` to the notification payload for easier tracking
+- MCP: Stop FastMCP OAuth startup from printing Authlib deprecation warnings by upgrading the MCP client stack to FastMCP 3.2.4
+- MCP: Store OAuth MCP tokens in `~/.nexus/mcp-oauth/` using FastMCP 3's persistent storage API; users with existing OAuth MCP authorizations may need to run `nexus mcp auth <name>` once after upgrading
+
+## 1.42.0 (2026-05-11)
+
+- Shell: Switch the Windows shell backend from PowerShell to Git Bash, so the Shell tool now runs commands through `bash.exe` (POSIX semantics) instead of `powershell.exe`. Windows users get the same Unix-style command syntax (`&&`, `||`, `|`, `/dev/null`, `grep`, `sed`, etc.) as Linux/macOS. **Requires Git for Windows installed**: nexus-station locates `bash.exe` via the `NEXUS_CLI_GIT_BASH_PATH` env override → `where.exe git` → standard install paths (`C:\Program Files\Git\bin\bash.exe`); if none resolve, nexus-station prints an install hint and exits at startup
+- Shell: Defend against hallucinated CMD-style `2>nul` redirects on Windows by rewriting them to `2>/dev/null` before reaching git-bash — without this defense git-bash would create a file literally named `nul` (a Windows reserved device name) that breaks `git add .` and `git clone`; on Linux/macOS, `>nul` is a legitimate redirect to a file named `nul` and is left untouched
+- File: Accept POSIX-form paths on Windows in `ReadFile`, `WriteFile`, `StrReplaceFile`, `Glob`, and `Grep` — these tools now recognize `/c/Users/foo` (Git Bash style), `/cygdrive/c/Users/foo` (Cygwin style), and `\\server\share` (UNC) in addition to native Windows paths, automatically converting to native form for filesystem operations
+- Shell: Clear partial streamed output when an LLM step is retried — previously, if a step failed mid-stream (e.g. rate limit or server error), the incomplete text and unfinished tool-call blocks from the aborted attempt would remain on screen and be mixed with the new attempt's output. The shell UI now discards the partial state and prints a retry banner showing the reason, attempt count, and wait time; print mode also discards buffered assistant messages on retry
+- Wire: Bump protocol version to 1.10 — add `StepRetry` event emitted when a step attempt fails and will be retried, carrying attempt count, wait time, and error details
+- Core: Stop plan-mode and afk-mode workflow prompts from being injected into subagents — subagents share session-level mode state for persistence, but their YAMLs typically exclude root workflow tools such as `EnterPlanMode`, `ExitPlanMode`, and `AskUserQuestion`. These prompt injections are now root-only. Tool-level read-only checks under plan mode are unchanged, so behavior compatibility is preserved
+
+## 1.41.0 (2026-04-30)
+
+- Plugin: Support installing plugins directly from a `.zip` URL — `kimi plugin install` now accepts HTTP(S) URLs ending in `.zip` (e.g. GitHub/GitLab archive links like `.../archive/refs/heads/main.zip`) and downloads + extracts them before resolving `plugin.json`, in addition to the existing git URL, local directory, and local zip-file sources
+- Shell: Enable clipboard image paste on headless Linux over SSH — when pyperclip is unavailable (e.g. DISPLAY is not set), Ctrl-V now falls back to xclip or wl-paste so remote clipboard bridges can still inject images; also prevents a UI crash from built-in clipboard shortcuts when pyperclip is broken
+
 ## 1.40.0 (2026-04-28)
 
 - Core: Fix `--yolo` mode unintentionally preventing the model from calling `AskUserQuestion` — yolo used to inject a system reminder telling the model it was in "non-interactive mode" and must not ask, and the ask-user tool auto-dismissed in yolo. Both were wrong: yolo only bypasses permission approvals; it does not mean "the user is gone". Yolo no longer injects model guidance, and the user remains reachable through `AskUserQuestion`
@@ -42,12 +70,12 @@ Only write entries that are worth mentioning to users.
 - Kosong: Fix Kimi provider sending empty `content` alongside `tool_calls`, which caused 400 "text content is empty" errors from the Moonshot API. When an assistant message has tool calls and its visible content is effectively empty (no text or only whitespace/think parts), the `content` field is now omitted entirely
 - Shell: Fix approval request feedback text cursor rendering — the block cursor now correctly renders at the actual cursor position instead of always being pinned to the end of the line; when the cursor is in the middle of the text, the character under the cursor is drawn with reverse video (mimicking a terminal's native block cursor)
 - Kosong: Fix Moonshot 400 `At path 'properties.X': type is not defined` when an MCP server exposes tools whose parameter schemas have enum-only or otherwise type-less properties (seen with the JetBrains Rider MCP's `truncateMode`) — the Kimi provider now patches each tool's schema in-flight to fill in a JSON Schema `type` (inferred from `enum`/`const` values when possible, else defaulted to `"string"`), so the whole session no longer fails every request with a schema validation error; OpenAI and Anthropic paths are unaffected
-- Skill: Project-scope skill discovery now walks up to the nearest `.git` ancestor before looking for `.kimi/skills` / `.claude/skills` / `.codex/skills` / `.agents/skills`, so skills defined at the repository root are picked up even when kimi-cli is launched from a subdirectory (for example inside a monorepo package). Falls back to the work directory itself when no `.git` marker is found, so we never walk up into an unrelated parent tree.
-- Skill: Change the default of `merge_all_available_skills` from `false` to `true`. kimi-cli now merges all existing user- and project-level brand skill directories (`.kimi/skills`, `.claude/skills`, `.codex/skills`) by default instead of only using the first one found, so users who keep skills in multiple brand directories — for example both `~/.kimi/skills` and `~/.claude/skills` — see every skill out of the box. **Behavior change**: users who previously relied on the first-match default can restore it by setting `merge_all_available_skills = false` in their config.
+- Skill: Project-scope skill discovery now walks up to the nearest `.git` ancestor before looking for `.kimi/skills` / `.claude/skills` / `.codex/skills` / `.agents/skills`, so skills defined at the repository root are picked up even when nexus-station is launched from a subdirectory (for example inside a monorepo package). Falls back to the work directory itself when no `.git` marker is found, so we never walk up into an unrelated parent tree.
+- Skill: Change the default of `merge_all_available_skills` from `false` to `true`. nexus-station now merges all existing user- and project-level brand skill directories (`.kimi/skills`, `.claude/skills`, `.codex/skills`) by default instead of only using the first one found, so users who keep skills in multiple brand directories — for example both `~/.nexus/skills` and `~/.claude/skills` — see every skill out of the box. **Behavior change**: users who previously relied on the first-match default can restore it by setting `merge_all_available_skills = false` in their config.
 
 ## 1.38.0 (2026-04-22)
 - Shell: Fix `Rejected by user` misleading message when an approval modal times out — after the 300s safety timeout, the tool call now rejects with `Rejected: approval timed out`, so users returning to their session after stepping away can tell the rejection was a timeout rather than a manual rejection. Pass `--yolo`/`-y` to auto-approve tool calls if you regularly leave sessions unattended
-- Auth: Fix OAuth users being forced to `/login` again after an unrelated refresh-token rotation race — when a concurrently-running kimi-cli instance (terminal, VS Code extension, or `kimi -p` one-shot) legitimately rotated the refresh token, the current instance's now-stale refresh request would come back with a 401, and a TOCTOU window between the "did another instance rotate?" disk check and the `delete_tokens` call could wipe the credentials file even though a valid rotated token was about to be written to it; the in-memory cache is still cleared so truly revoked tokens surface on the next request, but the file is preserved so a concurrent instance's freshly-rotated token can be recovered, and an eventual `/login` still overwrites it atomically
+- Auth: Fix OAuth users being forced to `/login` again after an unrelated refresh-token rotation race — when a concurrently-running nexus-station instance (terminal, VS Code extension, or `kimi -p` one-shot) legitimately rotated the refresh token, the current instance's now-stale refresh request would come back with a 401, and a TOCTOU window between the "did another instance rotate?" disk check and the `delete_tokens` call could wipe the credentials file even though a valid rotated token was about to be written to it; the in-memory cache is still cleared so truly revoked tokens surface on the next request, but the file is preserved so a concurrent instance's freshly-rotated token can be recovered, and an eventual `/login` still overwrites it atomically
 - Kosong: Fix parallel tool results being split into multiple user messages in Anthropic provider — consecutive tool-result-only user messages are now merged into a single message, complying with the Anthropic Messages API spec that all `tool_use` blocks in an assistant turn must be answered within one user message; this fixes 400 errors on strict Anthropic-compatible backends (e.g. DeepSeek `/anthropic` endpoint) and prevents the official backend from silently teaching the model to avoid parallel tool calls
 
 ## 1.37.0 (2026-04-20)
@@ -107,7 +135,7 @@ Only write entries that are worth mentioning to users.
 - Core: Improve error diagnostics — enrich internal logging coverage, include relevant log files and system manifest in `kimi export` archives, and surface actionable error messages for common failures (auth, network, timeout, quota)
 - Shell: Gracefully exit with crash report when working directory becomes inaccessible during session — detects CWD loss (external drive unplugged, directory deleted, or filesystem unmounted) and prints a session recovery panel with session ID and work directory before exiting cleanly
 - Shell: Use `git ls-files` for `@` file mention discovery — file completer now queries `git ls-files --recurse-submodules` with a 5-second timeout as the primary discovery mechanism, falling back to `os.walk` for non-git repositories; this fixes large repositories (e.g., apache/superset with 65k+ files) where the 1000-file limit caused late-alphabetical directories to be unreachable (fixes #1375)
-- Core: Add shared `file_filter` module — unifies file mention logic between shell and web UIs via `src/nexus_station/utils/file_filter.py`, providing consistent path filtering, ignored directory exclusion, and git-aware file discovery
+- Core: Add shared `file_filter` module — unifies file mention logic between shell and web UIs via `src/kimi_cli/utils/file_filter.py`, providing consistent path filtering, ignored directory exclusion, and git-aware file discovery
 - Shell: Prevent path traversal in file mention scope parameter — the `scope` parameter in file completer requests is now validated to prevent directory traversal attacks
 - Web: Restore unfiltered directory listing in file browser API — file browser endpoint no longer applies git-aware filtering, ensuring all files are visible in the web UI file picker
 - Todo: Refactor SetTodoList to persist state and prevent tool call storms — todos are now persisted to session state (root agent) and independent state files (sub-agents); adds query mode (omit `todos` to read current state) and clear mode (pass `[]`); includes anti-storm guidance in tool description to prevent repeated calls without progress (fixes #1710)
@@ -125,9 +153,9 @@ Only write entries that are worth mentioning to users.
 - Core: Fix parallel foreground subagent approval requests hanging the session — in interactive shell mode, `_set_active_approval_sink` no longer flushes pending approval requests to the live view sink (which cannot render approval modals); requests stay in the pending queue for the prompt modal path; also adds a 300-second timeout to `wait_for_response` so that any unresolved approval request eventually raises `ApprovalCancelledError` instead of hanging forever
 - CLI: Add `--session`/`--resume` (`-S`/`-r`) flag to resume sessions — without an argument opens an interactive session picker (shell UI only); with a session ID resumes that specific session; replaces the reverted `--pick-session`/`--list-sessions` design with a unified optional-value flag
 - CLI: Add CJK-safe `shorten()` utility — replaces all `textwrap.shorten` calls so that CJK text without spaces is truncated gracefully instead of collapsing to just the placeholder
-- Core: Fix skills in brand directories (e.g. `~/.kimi/skills/`) silently disappearing when a generic directory (`~/.config/agents/skills/`) exists but is empty — skill directory discovery now searches brand and generic directory groups independently and merges both results, instead of stopping at the first existing directory across all candidates
-- Core: Add `merge_all_available_skills` config option — when enabled, skills from all existing brand directories (`~/.kimi/skills/`, `~/.claude/skills/`, `~/.codex/skills/`) are loaded and merged instead of using only the first one found; same-name skills follow priority order kimi > claude > codex; disabled by default
-- CLI: Add `--plan` flag and `default_plan_mode` config option — start new sessions in plan mode via `kimi --plan` or by setting `default_plan_mode = true` in `~/.kimi/config.toml`; resumed sessions preserve their existing plan mode state
+- Core: Fix skills in brand directories (e.g. `~/.nexus/skills/`) silently disappearing when a generic directory (`~/.config/agents/skills/`) exists but is empty — skill directory discovery now searches brand and generic directory groups independently and merges both results, instead of stopping at the first existing directory across all candidates
+- Core: Add `merge_all_available_skills` config option — when enabled, skills from all existing brand directories (`~/.nexus/skills/`, `~/.claude/skills/`, `~/.codex/skills/`) are loaded and merged instead of using only the first one found; same-name skills follow priority order kimi > claude > codex; disabled by default
+- CLI: Add `--plan` flag and `default_plan_mode` config option — start new sessions in plan mode via `kimi --plan` or by setting `default_plan_mode = true` in `~/.nexus/config.toml`; resumed sessions preserve their existing plan mode state
 - Shell: Add `/undo` and `/fork` commands for session forking — `/undo` lets you pick a previous turn and fork a new session with the selected message pre-filled for re-editing; `/fork` duplicates the entire session history into a new session; the original session is always preserved
 - CLI: Add `-r` as a short alias for `--session` and print a resume hint (`kimi -r <session-id>`) whenever a session exits — covers normal exit, Ctrl-C, `/undo`, `/fork`, and `/sessions` switch so users can always find their way back
 - Core: Fix `custom_headers` not being passed to non-Kimi providers — OpenAI, Anthropic, Google GenAI, and Vertex AI providers now correctly forward custom headers configured in `providers.*.custom_headers`
@@ -162,7 +190,7 @@ Only write entries that are worth mentioning to users.
 - Grep: Add token efficiency improvements — default `head_limit` of 250 with `offset` pagination, `--hidden` search with VCS directory exclusion, `files_with_matches` sorted by modification time, relative path output, and `--max-columns 500` for non-content modes
 - Grep: `line_number` (`-n`) now defaults to `true` in content mode — line numbers are included by default so the model can reference precise code locations
 - Grep: `count_matches` mode now includes a summary in the message — e.g. "Found 30 total occurrences across 10 files."
-- ACP: Fix `ValueError: list.index(x): x not in list` crash when ACP is launched via `kimi-code` or `kimi-cli` entry-points (e.g. JetBrains AI Assistant)
+- ACP: Fix `ValueError: list.index(x): x not in list` crash when ACP is launched via `kimi-code` or `nexus-station` entry-points (e.g. JetBrains AI Assistant)
 - Core: Fix OpenAI-compatible APIs (e.g. One API) returning 400 errors in multi-turn conversations when the server returns `reasoning_content` by default — `reasoning_effort` is now auto-set to `"medium"` when history contains thinking content and `reasoning_key` is configured
 - Shell: Add `/theme` command and dark/light theme support — users with light terminal backgrounds can now switch to a light color palette via `/theme light` or `theme = "light"` in `config.toml`; diff highlights, task browser, prompt UI, and MCP status colors all adapt to the selected theme
 - Core: Fix context overflow before compaction — tool result tokens are now estimated and included in the auto-compaction trigger check, preventing "exceeded model token limit" errors when large tool outputs push the context beyond the model limit between API calls
@@ -242,11 +270,11 @@ Only write entries that are worth mentioning to users.
 
 - Shell: Increase pasted text placeholder thresholds to 1000 characters or 15 lines (previously 300 characters or 3 lines), making voice/typeless workflows less disruptive
 - Core: Plan mode now supports multiple selectable approach options — when the agent's plan contains distinct alternative paths, `ExitPlanMode` can present 2–3 labeled choices for the user to pick which approach to execute; the chosen option is returned to the agent as the selected approach
-- Core: Persist plan session ID and file path across process restarts — the plan session identifier and file slug are saved to `SessionState`, so restarting Kimi Code mid-plan resumes the same plan file in `~/.kimi/plans/` instead of creating a new one
+- Core: Persist plan session ID and file path across process restarts — the plan session identifier and file slug are saved to `SessionState`, so restarting Kimi Code mid-plan resumes the same plan file in `~/.nexus/plans/` instead of creating a new one
 - Core: Plan mode now supports incremental plan edits — the agent can use `StrReplaceFile` to surgically update sections of the plan file instead of rewriting the entire file with `WriteFile`, and non-plan file edits are now hard-blocked rather than requiring approval
 - Core: Defer MCP startup and surface loading progress — MCP servers now initialize asynchronously after the shell UI starts, with live progress indicators showing connection status; Shell displays connecting and ready states in the status area, Web shows server connection status
 - Core: Optimize lightweight startup paths — implement lazy-loading for CLI subcommands and version metadata, significantly reducing startup time for common commands like `--version` and `--help`
-- Build: Fix Nix `FileCollisionError` for `bin/kimi` — remove duplicate entry point from `kimi-code` package so `kimi-cli` owns `bin/kimi` exclusively
+- Build: Fix Nix `FileCollisionError` for `bin/kimi` — remove duplicate entry point from `kimi-code` package so `nexus-station` owns `bin/kimi` exclusively
 - Shell: Preserve unsubmitted input across agent turns — text typed in the prompt while the agent is running is no longer lost when the turn ends; the user can press Enter to submit the draft as the next message
 - Shell: Fix Ctrl-C and Ctrl-D not working correctly after an agent run completes — keyboard interrupts and EOF were silently swallowed instead of showing the tip or exiting the shell
 
@@ -283,7 +311,7 @@ Only write entries that are worth mentioning to users.
 - Core: Fix StatusUpdate not reflecting plan mode changes triggered by tools — send a corrected `StatusUpdate` after `EnterPlanMode`/`ExitPlanMode` tool execution so the client sees the up-to-date state
 - Core: Fix HTTP header values containing trailing whitespace/newlines on certain Linux systems (e.g. kernel 6.8.0-101) causing connection errors — strip whitespace from ASCII header values before sending
 - Core: Fix OpenAI Responses provider sending implicit `reasoning.effort=null` which breaks Responses-compatible endpoints that require reasoning — reasoning parameters are now omitted unless explicitly set
-- Vis: Add session download, import, export and delete — one-click ZIP download from session explorer and detail page, ZIP import into a dedicated `~/.kimi/imported_sessions/` directory with "Imported" filter toggle, `kimi export <session_id>` CLI command, and delete support for imported sessions with AlertDialog confirmation
+- Vis: Add session download, import, export and delete — one-click ZIP download from session explorer and detail page, ZIP import into a dedicated `~/.nexus/imported_sessions/` directory with "Imported" filter toggle, `kimi export <session_id>` CLI command, and delete support for imported sessions with AlertDialog confirmation
 - Core: Fix context compaction failing when conversation contains media parts (images, audio, video) — switch from blacklist filtering (exclude `ThinkPart`) to whitelist filtering (only keep `TextPart`) to prevent unsupported content types from being sent to the compaction API
 - Web: Fix `@` file mention index not refreshing after switching sessions or when workspace files change — reset index on session switch, auto-refresh after 30s staleness, and support path-prefix search beyond the 500-file limit
 
@@ -579,7 +607,7 @@ Only write entries that are worth mentioning to users.
 ## 0.75 (2026-01-09)
 
 - Tool: Improve `ReadFile` tool description
-- Skills: Add built-in `kimi-cli-help` skill to answer Kimi Code CLI usage and configuration questions
+- Skills: Add built-in `nexus-station-help` skill to answer Kimi Code CLI usage and configuration questions
 
 ## 0.74 (2026-01-09)
 
@@ -595,7 +623,7 @@ Only write entries that are worth mentioning to users.
 - MCP: Ensure MCP tools finish loading before starting the agent loop
 - Wire: Fix Wire mode failing to accept valid `cancel` requests
 - Setup: Allow `/model` to switch between all available models for the selected provider
-- Lib: Re-export all Wire message types from `nexus_station.wire.types`, as a replacement of `nexus_station.wire.message`
+- Lib: Re-export all Wire message types from `kimi_cli.wire.types`, as a replacement of `kimi_cli.wire.message`
 - Loop: Add `max_ralph_iterations` loop control config to limit extra Ralph iterations
 - Config: Rename `max_steps_per_run` to `max_steps_per_turn` in loop control config (backward-compatible)
 - CLI: Add `--max-steps-per-turn`, `--max-retries-per-step` and `--max-ralph-iterations` options to override loop control config
@@ -622,10 +650,10 @@ Only write entries that are worth mentioning to users.
 
 ## 0.69 (2025-12-29)
 
-- Core: Support discovering skills in `~/.kimi/skills` or `~/.claude/skills`
+- Core: Support discovering skills in `~/.nexus/skills` or `~/.claude/skills`
 - Python: Lower the minimum required Python version to 3.12
-- Nix: Add flake packaging; install with `nix profile install .#kimi-cli` or run `nix run .#kimi-cli`
-- CLI: Add `kimi-cli` script alias for invoking the CLI; can be run via `uvx kimi-cli`
+- Nix: Add flake packaging; install with `nix profile install .#nexus-station` or run `nix run .#nexus-station`
+- CLI: Add `nexus-station` script alias for invoking the CLI; can be run via `uvx nexus-station`
 - Lib: Move LLM config validation into `create_llm` and return `None` when missing config
 
 ## 0.68 (2025-12-24)
@@ -639,7 +667,7 @@ Only write entries that are worth mentioning to users.
 - ACP: Run shell commands in ACP client terminal if supported
 - Lib: Add `KimiToolset.find` method to find tools by class or name
 - Lib: Add `ToolResultBuilder.display` method to append display blocks to tool results
-- MCP: Add `kimi mcp auth` and related subcommands to manage MCP authorization
+- MCP: Add `nexus mcp auth` and related subcommands to manage MCP authorization
 
 ## 0.67 (2025-12-22)
 
@@ -653,7 +681,7 @@ Only write entries that are worth mentioning to users.
 - Lib: Provide `token_usage` and `message_id` in `StatusUpdate` Wire message
 - Lib: Add `KimiToolset.load_tools` method to load tools with dependency injection
 - Lib: Add `KimiToolset.load_mcp_tools` method to load MCP tools
-- Lib: Move `MCPTool` from `nexus_station.tools.mcp` to `nexus_station.soul.toolset`
+- Lib: Move `MCPTool` from `kimi_cli.tools.mcp` to `kimi_cli.soul.toolset`
 - Lib: Add `InvalidToolError`, `MCPConfigError` and `MCPRuntimeError`
 - Lib: Make the detailed Kimi Code CLI exception classes extend `ValueError` or `RuntimeError`
 - Lib: Allow passing validated `list[fastmcp.mcp_config.MCPConfig]` as `mcp_configs` for `KimiCLI.create` and `load_agent`
@@ -682,7 +710,7 @@ Only write entries that are worth mentioning to users.
 - UI: Fix UTF-16 surrogate characters input on Windows
 - Core: Add `/sessions` meta command to list existing sessions and switch to a selected one
 - CLI: Add `--session/-S` option to specify session ID to resume
-- MCP: Add `kimi mcp` subcommand group to manage global MCP config file `~/.kimi/mcp.json`
+- MCP: Add `kimi mcp` subcommand group to manage global MCP config file `~/.nexus/mcp.json`
 
 ## 0.63 (2025-12-12)
 
@@ -717,11 +745,11 @@ Only write entries that are worth mentioning to users.
 ## 0.59 (2025-11-28)
 
 - Core: Move context file location to `.kimi/sessions/{workdir_md5}/{session_id}/context.jsonl`
-- Lib: Move `WireMessage` type alias to `nexus_station.wire.message`
-- Lib: Add `nexus_station.wire.message.Request` type alias request messages (which currently only includes `ApprovalRequest`)
-- Lib: Add `nexus_station.wire.message.is_event`, `is_request` and `is_wire_message` utility functions to check the type of wire messages
-- Lib: Add `nexus_station.wire.serde` module for serialization and deserialization of wire messages
-- Lib: Change `StatusUpdate` Wire message to not using `nexus_station.soul.StatusSnapshot`
+- Lib: Move `WireMessage` type alias to `kimi_cli.wire.message`
+- Lib: Add `kimi_cli.wire.message.Request` type alias request messages (which currently only includes `ApprovalRequest`)
+- Lib: Add `kimi_cli.wire.message.is_event`, `is_request` and `is_wire_message` utility functions to check the type of wire messages
+- Lib: Add `kimi_cli.wire.serde` module for serialization and deserialization of wire messages
+- Lib: Change `StatusUpdate` Wire message to not using `kimi_cli.soul.StatusSnapshot`
 - Core: Record Wire messages to a JSONL file in session directory
 - Core: Introduce `TurnBegin` Wire message to mark the beginning of each agent turn
 - UI: Print user input again with a panel in shell mode
@@ -749,7 +777,7 @@ Only write entries that are worth mentioning to users.
 - UI: Improve approval request wordings
 - Tool: Remove `PatchFile` tool
 - Tool: Rename `Bash`/`CMD` tool to `Shell` tool
-- Tool: Move `Task` tool to `nexus_station.tools.multiagent` module
+- Tool: Move `Task` tool to `kimi_cli.tools.multiagent` module
 
 ## 0.56 (2025-11-19)
 
@@ -757,7 +785,7 @@ Only write entries that are worth mentioning to users.
 
 ## 0.55 (2025-11-18)
 
-- Lib: Add `nexus_station.app.enable_logging` function to enable logging when directly using `KimiCLI` class
+- Lib: Add `kimi_cli.app.enable_logging` function to enable logging when directly using `KimiCLI` class
 - Core: Fix relative path resolution in agent spec files
 - Core: Prevent from panic when LLM API connection failed
 - Tool: Optimize `FetchURL` tool for better content extraction
@@ -768,7 +796,7 @@ Only write entries that are worth mentioning to users.
 
 ## 0.54 (2025-11-13)
 
-- Lib: Move `WireMessage` from `nexus_station.wire.message` to `nexus_station.wire`
+- Lib: Move `WireMessage` from `kimi_cli.wire.message` to `kimi_cli.wire`
 - Print: Fix `stream-json` output format missing the last assistant message
 - UI: Add warning when API key is overridden by `KIMI_API_KEY` environment variable
 - UI: Make a bell sound when there's an approval request
@@ -796,7 +824,7 @@ Only write entries that are worth mentioning to users.
 ## 0.51 (2025-11-08)
 
 - Lib: Rename `Soul.model` to `Soul.model_name`
-- Lib: Rename `LLMModelCapability` to `ModelCapability` and move to `nexus_station.llm`
+- Lib: Rename `LLMModelCapability` to `ModelCapability` and move to `kimi_cli.llm`
 - Lib: Add `"thinking"` to `ModelCapability`
 - Lib: Remove `LLM.supports_image_in` property
 - Lib: Add required `Soul.model_capabilities` property
@@ -1054,7 +1082,7 @@ Only write entries that are worth mentioning to users.
 
 ### Changed
 
-- Rename package name `ensoul` to `kimi-cli`
+- Rename package name `ensoul` to `nexus-station`
 - Rename `ENSOUL_*` builtin system prompt arguments to `KIMI_*`
 - Further decouple `App` with `Soul`
 - Split `Soul` protocol and `KimiSoul` implementation for better modularity

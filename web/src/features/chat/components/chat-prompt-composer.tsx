@@ -304,7 +304,11 @@ export const ChatPromptComposer = memo(function ChatPromptComposerComponent({
         </PromptInputBody>
         <PromptInputFooter className="w-full gap-2 py-1 border-none bg-transparent shadow-none">
           <PromptInputTools className="flex-1 min-w-0 flex-wrap">
-            <GlobalConfigControls planMode={planMode} onPlanModeChange={onPlanModeChange} />
+            <GlobalConfigControls
+              planMode={planMode}
+              onPlanModeChange={onPlanModeChange}
+              sessionId={currentSession?.sessionId}
+            />
           </PromptInputTools>
           {isStreaming ? (
             <div className="flex items-center gap-1.5 shrink-0">

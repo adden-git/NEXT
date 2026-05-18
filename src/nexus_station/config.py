@@ -70,6 +70,12 @@ class LLMModel(BaseModel):
     """Model capabilities"""
     display_name: str | None = None
     """Human-readable model name (sourced from the provider's models API when available)"""
+    category: Literal["code", "text", "image"] | None = None
+    """Model category for UI grouping (code, text, image)"""
+    pricing: str | None = None
+    """Human-readable pricing info, e.g. '~$0.003 / 1K tokens'"""
+    pricing_tier: Literal["budget", "standard", "premium"] | None = None
+    """Pricing tier badge for UI (budget, standard, premium)"""
 
 
 class LoopControl(BaseModel):
@@ -214,6 +220,13 @@ class Config(BaseModel):
     theme: Literal["dark", "light"] = Field(
         default="dark",
         description="Terminal color theme. Use 'light' for light terminal backgrounds.",
+    )
+    image_output_dir: str = Field(
+        default="",
+        description=(
+            "Directory where generated images are saved. "
+            "If empty, images are saved inside each session directory."
+        ),
     )
     show_thinking_stream: bool = Field(
         default=True,

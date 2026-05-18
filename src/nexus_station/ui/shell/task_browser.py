@@ -16,7 +16,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from nexus_station.background import TaskView, is_terminal_status
-from nexus_station.soul.nexussoul import NexusSoul
+from nexus_station.soul.kimisoul import KimiSoul
 from nexus_station.ui.shell.console import console
 from nexus_station.utils.datetime import format_duration, format_relative_time
 
@@ -46,7 +46,7 @@ def format_task_choice(view: TaskView, *, now: float | None = None) -> str:
 
 @dataclass(slots=True)
 class TaskBrowserModel:
-    soul: NexusSoul
+    soul: KimiSoul
     filter_mode: TaskBrowserFilter = "all"
     message: str = ""
     message_expires_at: float | None = None
@@ -233,7 +233,7 @@ class TaskBrowserModel:
 
 
 class TaskBrowserApp:
-    def __init__(self, soul: NexusSoul):
+    def __init__(self, soul: KimiSoul):
         self._model = TaskBrowserModel(soul)
         task_values, selected = self._model.refresh()
         self._task_list = RadioList(

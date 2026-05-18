@@ -271,7 +271,7 @@ def build_export_markdown(
         f"token_count: {token_count}",
         "---",
         "",
-        "# Kimi Session Export",
+        "# NEXUS Session Export",
         "",
     ]
 

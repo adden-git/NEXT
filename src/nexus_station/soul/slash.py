@@ -21,11 +21,11 @@ from nexus_station.utils.slashcmd import SlashCommandRegistry
 from nexus_station.wire.types import StatusUpdate, TextPart
 
 if TYPE_CHECKING:
-    from nexus_station.soul.nexussoul import NexusSoul
+    from nexus_station.soul.kimisoul import KimiSoul
 
-type SoulSlashCmdFunc = Callable[[NexusSoul, str], None | Awaitable[None]]
+type SoulSlashCmdFunc = Callable[[KimiSoul, str], None | Awaitable[None]]
 """
-A function that runs as a NexusSoul-level slash command.
+A function that runs as a KimiSoul-level slash command.
 
 Raises:
     Any exception that can be raised by `Soul.run`.
@@ -35,16 +35,16 @@ registry = SlashCommandRegistry[SoulSlashCmdFunc]()
 
 
 @registry.command
-async def init(soul: NexusSoul, args: str):
+async def init(soul: KimiSoul, args: str):
     """Analyze the codebase and generate an `AGENTS.md` file"""
-    from nexus_station.soul.nexussoul import NexusSoul
+    from nexus_station.soul.kimisoul import KimiSoul
 
     with tempfile.TemporaryDirectory() as temp_dir:
         tmp_context = Context(file_backend=Path(temp_dir) / "context.jsonl")
-        tmp_soul = NexusSoul(soul.agent, context=tmp_context)
+        tmp_soul = KimiSoul(soul.agent, context=tmp_context)
         await tmp_soul.run(prompts.INIT)
 
-    agents_md = await load_agents_md(soul.runtime.builtin_args.NEXUS_WORK_DIR)
+    agents_md = await load_agents_md(soul.runtime.builtin_args.KIMI_WORK_DIR)
     system_message = system(
         "The user just ran `/init` slash command. "
         "The system has analyzed the codebase and generated an `AGENTS.md` file. "
@@ -57,14 +57,15 @@ async def init(soul: NexusSoul, args: str):
 
 
 @registry.command
-async def compact(soul: NexusSoul, args: str):
+async def compact(soul: KimiSoul, args: str):
     """Compact the context (optionally with a custom focus, e.g. /compact keep db discussions)"""
     if soul.context.n_checkpoints == 0:
         wire_send(TextPart(text="The context is empty."))
         return
 
     logger.info("Running `/compact`")
-    await soul.compact_context(custom_instruction=args.strip())
+    instruction = args.strip()
+    await soul.compact_context(manual=True, custom_instruction=instruction)
     wire_send(TextPart(text="The context has been compacted."))
     snap = soul.status
     wire_send(
@@ -77,7 +78,7 @@ async def compact(soul: NexusSoul, args: str):
 
 
 @registry.command(aliases=["reset"])
-async def clear(soul: NexusSoul, args: str):
+async def clear(soul: KimiSoul, args: str):
     """Clear the context"""
     logger.info("Running `/clear`")
     await soul.context.clear()
@@ -94,7 +95,7 @@ async def clear(soul: NexusSoul, args: str):
 
 
 @registry.command
-async def yolo(soul: NexusSoul, args: str):
+async def yolo(soul: KimiSoul, args: str):
     """Toggle YOLO mode (auto-approve all actions)"""
     from nexus_station.telemetry import track
 
@@ -122,7 +123,7 @@ async def yolo(soul: NexusSoul, args: str):
 
 
 @registry.command
-async def afk(soul: NexusSoul, args: str):
+async def afk(soul: KimiSoul, args: str):
     """Toggle afk mode (auto-dismiss AskUserQuestion, auto-approve tool calls)"""
     from nexus_station.telemetry import track
 
@@ -156,7 +157,7 @@ async def afk(soul: NexusSoul, args: str):
 
 
 @registry.command
-async def plan(soul: NexusSoul, args: str):
+async def plan(soul: KimiSoul, args: str):
     """Toggle plan mode. Usage: /plan [on|off|view|clear]"""
     subcmd = args.strip().lower()
 
@@ -197,7 +198,7 @@ async def plan(soul: NexusSoul, args: str):
 
 
 @registry.command(name="add-dir")
-async def add_dir(soul: NexusSoul, args: str):
+async def add_dir(soul: KimiSoul, args: str):
     """Add a directory to the workspace. Usage: /add-dir <path>. Run without args to list added dirs"""  # noqa: E501
     from kaos.path import KaosPath
 
@@ -229,7 +230,7 @@ async def add_dir(soul: NexusSoul, args: str):
         return
 
     # Check if it's within the work_dir (already accessible)
-    work_dir = soul.runtime.builtin_args.NEXUS_WORK_DIR
+    work_dir = soul.runtime.builtin_args.KIMI_WORK_DIR
     if is_within_directory(path, work_dir):
         wire_send(TextPart(text=f"Directory is already within the working directory: {path}"))
         return
@@ -272,7 +273,7 @@ async def add_dir(soul: NexusSoul, args: str):
 
 
 @registry.command
-async def export(soul: NexusSoul, args: str):
+async def export(soul: KimiSoul, args: str):
     """Export current session context to a markdown file"""
     from nexus_station.utils.export import perform_export
 
@@ -300,7 +301,7 @@ async def export(soul: NexusSoul, args: str):
 
 
 @registry.command(name="import")
-async def import_context(soul: NexusSoul, args: str):
+async def import_context(soul: KimiSoul, args: str):
     """Import context from a file or session ID"""
     from nexus_station.utils.export import perform_import
 

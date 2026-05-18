@@ -27,7 +27,7 @@ from nexus_station.wire.types import BtwBegin, BtwEnd, TextPart
 if TYPE_CHECKING:
     from kosong.chat_provider import StreamedMessagePart
 
-    from nexus_station.soul.nexussoul import NexusSoul
+    from nexus_station.soul.kimisoul import KimiSoul
 
 _BTW_MAX_TURNS = 2
 
@@ -76,11 +76,11 @@ class _DenyAllToolset:
 # ---------------------------------------------------------------------------
 
 
-def _build_btw_context(soul: NexusSoul, question: str) -> tuple[str, list[Message], _DenyAllToolset]:
+def _build_btw_context(soul: KimiSoul, question: str) -> tuple[str, list[Message], _DenyAllToolset]:
     """Build (system_prompt, history, toolset) aligned with the main agent.
 
     Uses the same system_prompt, normalize_history(), and tool definitions
-    as ``NexusSoul._step`` so the LLM provider can reuse the prompt cache.
+    as ``KimiSoul._step`` so the LLM provider can reuse the prompt cache.
     """
     system_prompt = soul._agent.system_prompt  # pyright: ignore[reportPrivateUsage]
     effective_history = normalize_history(soul.context.history)
@@ -99,7 +99,7 @@ def _build_btw_context(soul: NexusSoul, question: str) -> tuple[str, list[Messag
 
 
 async def execute_side_question(
-    soul: NexusSoul,
+    soul: KimiSoul,
     question: str,
     on_text_chunk: Callable[[str], None] | None = None,
 ) -> tuple[str | None, str | None]:
@@ -110,17 +110,26 @@ async def execute_side_question(
     to the history and a second step gives the LLM another chance.
 
     Args:
-        soul: The NexusSoul instance (for context and chat_provider access).
+        soul: The KimiSoul instance (for context and chat_provider access).
         question: The user's side question.
         on_text_chunk: Optional callback for streaming text chunks.
 
     Returns:
         (response_text, None) on success, (None, error_message) on failure.
     """
-    if soul._runtime.llm is None:  # pyright: ignore[reportPrivateUsage]
-        return None, "LLM is not set."
+    import time
+
+    from nexus_station.telemetry import track
+
+    t0 = time.monotonic()
+    _outcome = "error"
+    _error_type: str | None = None
 
     try:
+        if soul._runtime.llm is None:  # pyright: ignore[reportPrivateUsage]
+            _error_type = "LLMNotSet"
+            return None, "LLM is not set."
+
         chat_provider = soul._runtime.llm.chat_provider  # pyright: ignore[reportPrivateUsage]
         system_prompt, history, toolset = _build_btw_context(soul, question)
 
@@ -146,6 +155,8 @@ async def execute_side_question(
             # didn't also call tools (mixed text+tool = incomplete preamble).
             response_text = "".join(text_chunks).strip()
             if response_text and not result.tool_calls:
+                _outcome = "success"
+                _error_type = None
                 return response_text, None
 
             # No text — did the LLM try to call a tool?
@@ -166,16 +177,30 @@ async def execute_side_question(
                 continue
 
             # Last turn and still no text — report the tool call attempt
+            _error_type = "ToolCallDenied"
             tool_names = [tc.function.name for tc in result.tool_calls]
             return None, (
                 f"Side question tried to call tools ({', '.join(tool_names)}) "
                 "instead of answering directly. Try rephrasing or ask in the main conversation."
             )
 
+        _error_type = "NoResponse"
         return None, "No response received."
     except Exception as e:
+        _error_type = type(e).__name__
         logger.warning("Side question failed: {error}", error=e)
         return None, str(e)
+    finally:
+        elapsed = time.monotonic() - t0
+        kwargs: dict[str, bool | int | float | str | None] = {
+            "tool_name": "btw",
+            "outcome": _outcome,
+            "duration_ms": int(elapsed * 1000),
+            "dup_type": "normal",
+        }
+        if _error_type is not None:
+            kwargs["error_type"] = _error_type
+        track("tool_call", **kwargs)
 
 
 def _tool_result_to_message(tool_result: ToolResult) -> Message:
@@ -193,7 +218,7 @@ def _tool_result_to_message(tool_result: ToolResult) -> Message:
 # ---------------------------------------------------------------------------
 
 
-async def run_side_question(soul: NexusSoul, question: str) -> None:
+async def run_side_question(soul: KimiSoul, question: str) -> None:
     """Execute a side question via wire events."""
     if soul._runtime.llm is None:  # pyright: ignore[reportPrivateUsage]
         raise LLMNotSet()

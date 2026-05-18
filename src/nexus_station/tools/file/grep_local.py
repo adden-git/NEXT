@@ -24,6 +24,7 @@ from nexus_station.share import get_share_dir
 from nexus_station.tools.utils import ToolResultBuilder, load_desc
 from nexus_station.utils.aiohttp import new_client_session
 from nexus_station.utils.logging import logger
+from nexus_station.utils.path import normalize_user_path
 from nexus_station.utils.sensitive import is_sensitive_file, sensitive_file_warning
 
 
@@ -137,7 +138,7 @@ class Params(BaseModel):
 
 
 RG_VERSION = "15.0.0"
-RG_BASE_URL = "http://cdn.nexus.com/binaries/nexus-station/rg"
+RG_BASE_URL = "http://cdn.kimi.com/binaries/kimi-cli/rg"
 RG_TIMEOUT = 20  # seconds
 RG_MAX_BUFFER = 20_000_000  # 20MB stdout/stderr buffer limit
 RG_KILL_GRACE = 5  # seconds: SIGTERM → SIGKILL
@@ -316,7 +317,7 @@ def _build_rg_args(rg_path: str, params: Params, *, single_threaded: bool = Fals
     # Separate pattern from flags to avoid ambiguity (e.g. pattern starting with -)
     args.append("--")
     args.append(params.pattern)
-    args.append(os.path.expanduser(params.path))
+    args.append(os.path.expanduser(normalize_user_path(params.path)))
 
     return args
 
@@ -479,7 +480,7 @@ class Grep(CallableTool2[Params]):
                 output = "\n".join(lines)
 
             # Step 2: shorten paths to relative (prefix stripping)
-            search_base = os.path.abspath(os.path.expanduser(params.path))
+            search_base = os.path.abspath(os.path.expanduser(normalize_user_path(params.path)))
             if os.path.isfile(search_base):
                 search_base = os.path.dirname(search_base)
             output = _strip_path_prefix(output, search_base)

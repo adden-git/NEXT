@@ -5,7 +5,7 @@ from __future__ import annotations
 import secrets
 from pathlib import Path
 
-PLANS_DIR = Path.home() / ".nexus" / "plans"
+PLANS_DIR = Path.home() / ".kimi" / "plans"
 
 HERO_NAMES: list[str] = [
     # --- Marvel ---

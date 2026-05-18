@@ -10,7 +10,7 @@ from rich.rule import Rule
 from rich.syntax import Syntax
 from rich.text import Text
 
-from nexus_station.soul.nexussoul import NexusSoul
+from nexus_station.soul.kimisoul import KimiSoul
 from nexus_station.ui.shell.console import console
 from nexus_station.ui.shell.slash import registry
 from nexus_station.wire.types import (
@@ -147,7 +147,7 @@ def _format_message(msg: Message, index: int) -> Panel:
 @registry.command
 def debug(app: Shell, args: str):
     """Debug the context"""
-    assert isinstance(app.soul, NexusSoul)
+    assert isinstance(app.soul, KimiSoul)
 
     context = app.soul.context
     history = context.history

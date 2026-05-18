@@ -1,4 +1,4 @@
-# ACP Integration Notes (nexus-station)
+# ACP Integration Notes (kimi-cli)
 
 ## Protocol summary (ACP overview)
 - ACP is JSON-RPC 2.0 with request/response methods plus one-way notifications.
@@ -74,7 +74,7 @@
 
 ## Current gaps / not implemented
 - `authenticate` method (not used by current Zed ACP client).
-- `session/set_mode` and `session/set_model` (no multi-mode/model switching in nexus-station).
+- `session/set_mode` and `session/set_model` (no multi-mode/model switching in kimi-cli).
 - `ext_method` / `ext_notification` for custom ACP extensions are stubbed.
 - Single-session server does not implement `session/load` or `session/list`.
 

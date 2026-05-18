@@ -1,4 +1,4 @@
-"""Simple user auth for Kimi Next web UI."""
+"""Simple user auth for NEXUS Next web UI."""
 
 from __future__ import annotations
 
@@ -69,7 +69,7 @@ def create_first_user(username: str, password: str) -> dict[str, str]:
         ]
     }
     _save_users(users)
-    logger.info(f"Created first user '{username}' for Kimi Next web UI")
+    logger.info(f"Created first user '{username}' for NEXUS Next web UI")
     return {"username": username, "token": token}
 
 

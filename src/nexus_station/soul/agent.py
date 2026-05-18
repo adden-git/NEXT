@@ -47,38 +47,22 @@ if TYPE_CHECKING:
 class BuiltinSystemPromptArgs:
     """Builtin system prompt arguments."""
 
-    NEXUS_NOW: str
-    """The current datetime."""
-    NEXUS_WORK_DIR: KaosPath
-    """The absolute path of current working directory."""
-    NEXUS_WORK_DIR_LS: str
-    """The directory listing of current working directory."""
-    NEXUS_AGENTS_MD: str  # TODO: move to first message from system prompt
-    """The merged content of AGENTS.md files (from project root to work_dir)."""
-    NEXUS_SKILLS: str
-    """Formatted information about available skills."""
-    NEXUS_ADDITIONAL_DIRS_INFO: str
-    """Formatted information about additional directories in the workspace."""
-    NEXUS_OS: str
-    """The operating system kind, e.g. 'Windows', 'macOS', 'Linux'."""
-    NEXUS_SHELL: str
-    """The shell executable used by the Shell tool, e.g. 'bash (`/bin/bash`)'."""
-    KIMI_OS: str
-    """Alias for NEXUS_OS (legacy compatibility)."""
-    KIMI_SHELL: str
-    """Alias for NEXUS_SHELL (legacy compatibility)."""
     KIMI_NOW: str
-    """Alias for NEXUS_NOW (legacy compatibility)."""
+    """The current datetime."""
     KIMI_WORK_DIR: KaosPath
-    """Alias for NEXUS_WORK_DIR (legacy compatibility)."""
+    """The absolute path of current working directory."""
     KIMI_WORK_DIR_LS: str
-    """Alias for NEXUS_WORK_DIR_LS (legacy compatibility)."""
-    KIMI_AGENTS_MD: str
-    """Alias for NEXUS_AGENTS_MD (legacy compatibility)."""
+    """The directory listing of current working directory."""
+    KIMI_AGENTS_MD: str  # TODO: move to first message from system prompt
+    """The merged content of AGENTS.md files (from project root to work_dir)."""
     KIMI_SKILLS: str
-    """Alias for NEXUS_SKILLS (legacy compatibility)."""
+    """Formatted information about available skills."""
     KIMI_ADDITIONAL_DIRS_INFO: str
-    """Alias for NEXUS_ADDITIONAL_DIRS_INFO (legacy compatibility)."""
+    """Formatted information about additional directories in the workspace."""
+    KIMI_OS: str
+    """The operating system kind, e.g. 'Windows', 'macOS', 'Linux'."""
+    KIMI_SHELL: str
+    """The shell executable used by the Shell tool, e.g. 'bash (`/bin/bash`)'."""
 
 
 _AGENTS_MD_MAX_BYTES = 32 * 1024  # 32 KiB
@@ -105,12 +89,12 @@ async def load_agents_md(work_dir: KaosPath) -> str | None:
 
     For each directory on the path, the following candidates are checked in order:
 
-    1. ``.nexus/AGENTS.md``  — project-local kimi config (highest priority)
+    1. ``.kimi/AGENTS.md``  — project-local kimi config (highest priority)
     2. ``AGENTS.md``        — standard location
     3. ``agents.md``        — lowercase variant (mutually exclusive with 2)
 
-    Within a single directory, ``.nexus/AGENTS.md`` and ``AGENTS.md``/``agents.md``
-    are **both** loaded (with ``.nexus/`` first), but ``AGENTS.md`` and ``agents.md``
+    Within a single directory, ``.kimi/AGENTS.md`` and ``AGENTS.md``/``agents.md``
+    are **both** loaded (with ``.kimi/`` first), but ``AGENTS.md`` and ``agents.md``
     are mutually exclusive (uppercase wins).
 
     All discovered files are concatenated root→leaf, separated by ``\\n\\n``, with
@@ -124,14 +108,14 @@ async def load_agents_md(work_dir: KaosPath) -> str | None:
     # Phase 1: collect all candidate files (root → leaf order)
     discovered: list[tuple[KaosPath, str]] = []  # (path, content)
     for d in dirs:
-        # .nexus/AGENTS.md is always checked independently (can coexist with root-level file)
-        agents_path = d / ".nexus" / "AGENTS.md"
+        # .kimi/AGENTS.md is always checked independently (can coexist with root-level file)
+        kimi_path = d / ".kimi" / "AGENTS.md"
         # AGENTS.md and agents.md are mutually exclusive (uppercase wins)
         root_candidates = [d / "AGENTS.md", d / "agents.md"]
 
         candidates: list[KaosPath] = []
-        if await agents_path.is_file():
-            candidates.append(agents_path)
+        if await kimi_path.is_file():
+            candidates.append(kimi_path)
         for rc in root_candidates:
             if await rc.is_file():
                 candidates.append(rc)
@@ -211,7 +195,7 @@ class Runtime:
     ui_mode: str = "shell"
     resumed: bool = False
     hook_engine: Any = None
-    """HookEngine instance, set by NexusCLI after soul creation."""
+    """HookEngine instance, set by KimiCLI after soul creation."""
 
     def __post_init__(self) -> None:
         if self.subagent_store is None:
@@ -320,22 +304,14 @@ class Runtime:
             llm=llm,
             session=session,
             builtin_args=BuiltinSystemPromptArgs(
-                NEXUS_NOW=datetime.now().astimezone().isoformat(),
-                NEXUS_WORK_DIR=session.work_dir,
-                NEXUS_WORK_DIR_LS=ls_output,
-                NEXUS_AGENTS_MD=agents_md or "",
-                NEXUS_SKILLS=skills_formatted or "No skills found.",
-                NEXUS_ADDITIONAL_DIRS_INFO=additional_dirs_info,
-                NEXUS_OS=environment.os_kind,
-                NEXUS_SHELL=f"{environment.shell_name} (`{environment.shell_path}`)",
-                KIMI_OS=environment.os_kind,
-                KIMI_SHELL=f"{environment.shell_name} (`{environment.shell_path}`)",
                 KIMI_NOW=datetime.now().astimezone().isoformat(),
                 KIMI_WORK_DIR=session.work_dir,
                 KIMI_WORK_DIR_LS=ls_output,
                 KIMI_AGENTS_MD=agents_md or "",
                 KIMI_SKILLS=skills_formatted or "No skills found.",
                 KIMI_ADDITIONAL_DIRS_INFO=additional_dirs_info,
+                KIMI_OS=environment.os_kind,
+                KIMI_SHELL=f"{environment.shell_name} (`{environment.shell_path}`)",
             ),
             denwa_renji=DenwaRenji(),
             approval=Approval(state=approval_state),
@@ -416,12 +392,12 @@ async def load_agent(
 
     Raises:
         FileNotFoundError: When the agent file is not found.
-        AgentSpecError(NexusCLIException, ValueError): When the agent specification is invalid.
-        SystemPromptTemplateError(NexusCLIException, ValueError): When the system prompt template
+        AgentSpecError(KimiCLIException, ValueError): When the agent specification is invalid.
+        SystemPromptTemplateError(KimiCLIException, ValueError): When the system prompt template
             is invalid.
-        InvalidToolError(NexusCLIException, ValueError): When any tool cannot be loaded.
-        MCPConfigError(NexusCLIException, ValueError): When any MCP configuration is invalid.
-        MCPRuntimeError(NexusCLIException, RuntimeError): When any MCP server cannot be connected.
+        InvalidToolError(KimiCLIException, ValueError): When any tool cannot be loaded.
+        MCPConfigError(KimiCLIException, ValueError): When any MCP configuration is invalid.
+        MCPRuntimeError(KimiCLIException, RuntimeError): When any MCP server cannot be connected.
     """
     logger.info("Loading agent: {agent_file}", agent_file=agent_file)
     agent_spec = load_agent_spec(agent_file)
@@ -456,7 +432,6 @@ async def load_agent(
         )
 
     toolset = NexusToolset()
-    toolset.set_runtime(runtime)
     tool_deps = {
         NexusToolset: toolset,
         Runtime: runtime,

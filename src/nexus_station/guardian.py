@@ -11,7 +11,7 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from kosong.chat_provider import ChatProvider
-from kosong.message import Message, TextPart
+from kosong.message import Message, TextPart, ThinkPart
 from kosong import generate as kosong_generate
 
 from nexus_station import logger
@@ -26,20 +26,28 @@ _GUARDIAN_SYSTEM_PROMPT = """You are a security guardian AI. Your job is to revi
 
 Analyze the proposed tool call and assess its risk level.
 
-Consider:
-- Does the tool attempt to delete, overwrite, or modify critical files unexpectedly?
-- Does it execute arbitrary or suspicious shell commands?
-- Does it expose secrets, credentials, or private data?
-- Is the intent clearly aligned with the user's goals?
-- Does it touch files in the FORBIDDEN list (if any)?
+Be PRAGMATIC, not paranoid:
+- ReadFile, Glob, Grep, SearchWeb, FetchURL, GenerateImage are almost always SAFE (low risk)
+- Shell with common commands (ls, cat, grep, npm, python) is SAFE unless it deletes/modifies system files
+- WriteFile/StrReplaceFile to project files is SAFE — this is a coding assistant
+- GenerateImage (image generation) is SAFE — it creates local images and does not modify system files
+- Only flag MEDIUM if the operation is genuinely unusual (deleting files, sending data externally, modifying configs)
+- Only flag HIGH for clearly dangerous operations (rm -rf, dropping databases, exposing secrets)
+- CRITICAL only for definitely malicious intent or touching forbidden files
 
-Respond ONLY with a valid JSON object (no markdown, no explanations):
+Think step by step inside <thinking> tags, then respond with a valid JSON object:
 
+<thinking>
+Your step-by-step reasoning here...
+</thinking>
+
+```json
 {
   "risk": "low" | "medium" | "high" | "critical",
   "reason": "brief one-sentence explanation",
   "forbidden_hit": false
 }
+```
 
 Risk levels:
 - low: clearly safe, routine operation — auto-allow
@@ -62,19 +70,37 @@ def _build_prompt(tool_name: str, tool_input: dict[str, Any], forbidden_files: l
     return "\n".join(lines)
 
 
-def _parse_guardian_response(text: str, tool_name: str) -> HookResult:
-    """Parse guardian JSON response into HookResult."""
-    try:
-        # Extract JSON from possible markdown fences
-        raw = text.strip()
-        if raw.startswith("```"):
-            parts = raw.split("\n", 1)
-            if len(parts) > 1:
-                raw = parts[1]
-            if raw.endswith("```"):
-                raw = raw.rsplit("\n", 1)[0]
-            raw = raw.strip()
+def _parse_guardian_response(text: str, tool_name: str) -> tuple[HookResult, str]:
+    """Parse guardian response into (HookResult, thinking_text).
+    
+    Extracts thinking from <thinking> tags and JSON from markdown fences.
+    """
+    thinking = ""
+    raw = text.strip()
+    
+    # Extract thinking
+    if "<thinking>" in raw and "</thinking>" in raw:
+        try:
+            thinking_start = raw.index("<thinking>") + len("<thinking>")
+            thinking_end = raw.index("</thinking>")
+            thinking = raw[thinking_start:thinking_end].strip()
+            # Remove thinking from raw to help JSON extraction
+            raw = raw[:raw.index("<thinking>")] + raw[raw.index("</thinking>") + len("</thinking>"):]
+        except ValueError:
+            pass
+    
+    raw = raw.strip()
+    
+    # Extract JSON from markdown fences
+    if raw.startswith("```"):
+        parts = raw.split("\n", 1)
+        if len(parts) > 1:
+            raw = parts[1]
+        if raw.endswith("```"):
+            raw = raw.rsplit("\n", 1)[0]
+        raw = raw.strip()
 
+    try:
         data = json.loads(raw)
         if not isinstance(data, dict):
             raise ValueError("Guardian response is not a JSON object")
@@ -97,11 +123,11 @@ def _parse_guardian_response(text: str, tool_name: str) -> HookResult:
                 reason=reason,
                 risk="critical" if forbidden_hit else risk,
                 data=data,
-            )
+            ), thinking
 
         if risk == "low":
             # Low risk: auto-allow (no need to bother user)
-            return HookResult(action="allow", risk="low", data=data)
+            return HookResult(action="allow", risk="low", data=data), thinking
 
         # Medium/high: allow but tag with risk — approval system will ask user
         logger.info(
@@ -113,26 +139,32 @@ def _parse_guardian_response(text: str, tool_name: str) -> HookResult:
             reason=reason,
             risk=risk,
             data=data,
-        )
+        ), thinking
 
     except (json.JSONDecodeError, ValueError, TypeError) as e:
         logger.warning("Guardian AI returned invalid JSON for {tool}: {error}", tool=tool_name, error=e)
         # Fail-open on parse error
-        return HookResult(action="allow", risk="medium")
+        return HookResult(action="allow", risk="medium"), thinking
 
 
 class GuardianAI:
     """Guardian AI checker using a secondary LLM evaluation."""
 
-    def __init__(self, chat_provider: ChatProvider, forbidden_files: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        chat_provider: ChatProvider,
+        forbidden_files: list[str] | None = None,
+        system_prompt: str | None = None,
+    ) -> None:
         self._chat_provider = chat_provider
         self._forbidden_files = forbidden_files or []
+        self._system_prompt = system_prompt or _GUARDIAN_SYSTEM_PROMPT
 
-    async def check(self, tool_name: str, tool_input: dict[str, Any]) -> HookResult:
+    async def check(self, tool_name: str, tool_input: dict[str, Any]) -> tuple[HookResult, str]:
         """Run the guardian check on a proposed tool call.
 
         Returns:
-            HookResult with action + risk assessment.
+            (HookResult with action + risk assessment, thinking text).
             - risk="low" → auto-allow
             - risk="medium"|"high" → approval system asks user
             - risk="critical" → blocked
@@ -143,7 +175,7 @@ class GuardianAI:
 
             result = await kosong_generate(
                 self._chat_provider,
-                _GUARDIAN_SYSTEM_PROMPT,
+                self._system_prompt,
                 [],
                 history,
             )
@@ -157,14 +189,14 @@ class GuardianAI:
             response = "".join(text_parts).strip()
             if not response:
                 # Fail-open: empty response means allow
-                return HookResult(action="allow", risk="medium")
+                return HookResult(action="allow", risk="medium"), ""
 
             return _parse_guardian_response(response, tool_name)
 
         except Exception as e:
             # Fail-open on any error
             logger.warning("Guardian AI check failed for {tool}: {error}", tool=tool_name, error=e)
-            return HookResult(action="allow", risk="medium")
+            return HookResult(action="allow", risk="medium"), ""
 
 
 def _get_guardian_chat_provider(runtime: Runtime, guardian_model: str | None) -> ChatProvider | None:
@@ -225,4 +257,5 @@ def load_guardian_for_session(session: Session, runtime: Runtime) -> GuardianAI 
         return None
 
     forbidden_files = getattr(session.state, "forbidden_files", None) or []
-    return GuardianAI(chat_provider, forbidden_files=forbidden_files)
+    custom_prompt = getattr(session.state, "guardian_prompt", None)
+    return GuardianAI(chat_provider, forbidden_files=forbidden_files, system_prompt=custom_prompt)

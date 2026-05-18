@@ -1,5 +1,5 @@
 """
-Telemetry event tracking for nexus-station.
+Telemetry event tracking for kimi-cli.
 
 This module has NO dependencies on other nexus_station modules to avoid import cycles.
 track() can be called at any point during startup, even before the sink is attached.
@@ -125,7 +125,7 @@ def disable() -> None:
 def attach_sink(sink: EventSink) -> None:
     """Attach the event sink and drain any queued events.
 
-    Multi-session ACP mode calls ``NexusCLI.create()`` per session, which
+    Multi-session ACP mode calls ``KimiCLI.create()`` per session, which
     means ``attach_sink`` runs again while a previous sink may hold
     un-flushed buffered events. Flush the old sink synchronously (writes
     any pending events to the disk fallback) before replacing it, so

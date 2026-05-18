@@ -3,29 +3,26 @@
 from __future__ import annotations
 
 import asyncio
-import io
-from collections import deque
-from datetime import UTC, datetime
-from nexus_station.web.utils._json import json
+import json
 import mimetypes
 import os
 import shutil
 import time
-import zipfile
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 from urllib.parse import quote
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, status
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, Response
 from kaos.path import KaosPath
 from pydantic import BaseModel, Field
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from nexus_station import logger
 from nexus_station.metadata import load_metadata, save_metadata
-from nexus_station.session import Session as NexusCLISession
+from nexus_station.session import Session as KimiCLISession
 from nexus_station.utils.subprocess_env import get_clean_env
 from nexus_station.web.auth import is_origin_allowed, is_private_ip, verify_token
 from nexus_station.web.models import (
@@ -38,7 +35,7 @@ from nexus_station.web.models import (
     UpdateSessionRequest,
 )
 from nexus_station.web.runner.messages import new_session_status_message, send_history_complete
-from nexus_station.web.runner.process import NexusCLIRunner
+from nexus_station.web.runner.process import KimiCLIRunner
 from nexus_station.web.store.sessions import (
     JointSession,
     invalidate_sessions_cache,
@@ -61,9 +58,6 @@ work_dirs_router = APIRouter(prefix="/api/work-dirs", tags=["work-dirs"])
 
 # Constants
 MAX_UPLOAD_SIZE = 100 * 1024 * 1024  # 100MB
-MAX_FILE_SIZE = 50 * 1024 * 1024  # 50MB — files larger than this are streamed
-MAX_ZIP_SIZE = 500 * 1024 * 1024  # 500MB — max total size for ZIP downloads
-MAX_REPLAY_WIRE_MESSAGES = 200  # Max wire events to replay on reconnect
 DEFAULT_MAX_PUBLIC_PATH_DEPTH = 6
 SENSITIVE_PATH_PARTS = {
     "id_rsa",
@@ -102,19 +96,19 @@ def sanitize_filename(filename: str) -> str:
     return safe.strip() or "unnamed"
 
 
-def get_runner(req: Request) -> NexusCLIRunner:
-    """Get the NexusCLIRunner from the FastAPI app state."""
+def get_runner(req: Request) -> KimiCLIRunner:
+    """Get the KimiCLIRunner from the FastAPI app state."""
     return req.app.state.runner
 
 
-def get_runner_ws(ws: WebSocket) -> NexusCLIRunner:
-    """Get the NexusCLIRunner from the FastAPI app state (for WebSocket routes)."""
+def get_runner_ws(ws: WebSocket) -> KimiCLIRunner:
+    """Get the KimiCLIRunner from the FastAPI app state (for WebSocket routes)."""
     return ws.app.state.runner
 
 
 def get_editable_session(
     session_id: UUID,
-    runner: NexusCLIRunner,
+    runner: KimiCLIRunner,
 ) -> JointSession:
     """Get a session and verify it's not busy."""
     session = load_session_by_id(session_id)
@@ -196,21 +190,9 @@ def _ensure_public_file_access_allowed(
         )
 
 
-def _read_wire_lines(
-    wire_file: Path, max_messages: int | None = None, offset: int = 0
-) -> tuple[list[str], int]:
-    """Read and parse wire.jsonl into JSONRPC event strings (runs in thread).
-
-    Args:
-        wire_file: Path to the wire.jsonl file.
-        max_messages: If set, limit the number of events returned.
-        offset: Number of events to skip from the start of the file.
-
-    Returns:
-        A tuple of (event_strings, total_message_count).
-    """
+def _read_wire_lines(wire_file: Path) -> list[str]:
+    """Read and parse wire.jsonl into JSONRPC event strings (runs in thread)."""
     result: list[str] = []
-    total = 0
     with open(wire_file, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -236,56 +218,27 @@ def _read_wire_lines(
                     "params": message_raw,
                 }
                 if _is_req:
+                    # JSON-RPC requests require a top-level ``id`` so the
+                    # client can correlate its response.  Use the request's
+                    # own ``id`` field (e.g. ApprovalRequest.id,
+                    # QuestionRequest.id).  Note: ``message_raw`` wraps data
+                    # as ``{"type": ..., "payload": {...}}`` so the id lives
+                    # on the deserialized object, not at the raw dict top level.
                     event_msg["id"] = message.id
-                total += 1
-                if total <= offset:
-                    continue
                 result.append(json.dumps(event_msg, ensure_ascii=False))
-                if max_messages and len(result) >= max_messages:
-                    # We still count total but stop collecting
-                    pass
             except (json.JSONDecodeError, KeyError, ValueError, TypeError):
                 continue
-    # If max_messages is set, return the *last* N events (most recent)
-    if max_messages and len(result) > max_messages:
-        result = result[-max_messages:]
-    return result, total
+    return result
 
 
-async def replay_history(
-    ws: WebSocket, session_dir: Path, max_messages: int = MAX_REPLAY_WIRE_MESSAGES
-) -> None:
-    """Replay historical wire messages from wire.jsonl to a WebSocket.
-
-    Only the most recent ``max_messages`` events are replayed to avoid
-    overwhelming the client with huge histories.
-    """
+async def replay_history(ws: WebSocket, session_dir: Path) -> None:
+    """Replay historical wire messages from wire.jsonl to a WebSocket."""
     wire_file = session_dir / "wire.jsonl"
     if not await asyncio.to_thread(wire_file.exists):
         return
 
     try:
-        lines, total = await asyncio.to_thread(
-            _read_wire_lines, wire_file, max_messages=max_messages
-        )
-        if total > len(lines):
-            # Notify the client that history was truncated
-            trunc_notice = json.dumps(
-                {
-                    "jsonrpc": "2.0",
-                    "method": "event",
-                    "params": {
-                        "type": "history_truncated",
-                        "payload": {
-                            "total_messages": total,
-                            "shown_messages": len(lines),
-                            "skipped_messages": total - len(lines),
-                        },
-                    },
-                },
-                ensure_ascii=False,
-            )
-            await ws.send_text(trunc_notice)
+        lines = await asyncio.to_thread(_read_wire_lines, wire_file)
         for event_text in lines:
             await ws.send_text(event_text)
     except Exception:
@@ -294,7 +247,7 @@ async def replay_history(
 
 @router.get("/", summary="List all sessions")
 async def list_sessions(
-    runner: NexusCLIRunner = Depends(get_runner),
+    runner: KimiCLIRunner = Depends(get_runner),
     limit: int = 100,
     offset: int = 0,
     q: str | None = None,
@@ -331,7 +284,7 @@ async def list_sessions(
 @router.get("/{session_id}", summary="Get session")
 async def get_session(
     session_id: UUID,
-    runner: NexusCLIRunner = Depends(get_runner),
+    runner: KimiCLIRunner = Depends(get_runner),
 ) -> Session | None:
     """Get a session by ID."""
     session = load_session_by_id(session_id)
@@ -348,13 +301,6 @@ async def create_session(request: CreateSessionRequest | None = None) -> Session
     # Use provided work_dir or default to user's home directory
     if request and request.work_dir:
         work_dir_path = Path(request.work_dir).expanduser().resolve()
-        # Security: restrict directory creation to within the user's home directory
-        home_dir = Path.home().resolve()
-        if not work_dir_path.is_relative_to(home_dir):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Work directory must be within your home directory",
-            )
         # Validate the directory exists
         if not work_dir_path.exists():
             if request.create_dir:
@@ -385,7 +331,7 @@ async def create_session(request: CreateSessionRequest | None = None) -> Session
         work_dir = KaosPath.unsafe_from_local_path(work_dir_path)
     else:
         work_dir = KaosPath.unsafe_from_local_path(Path.home())
-    nexus_station_session = await NexusCLISession.create(work_dir=work_dir)
+    nexus_station_session = await KimiCLISession.create(work_dir=work_dir)
     context_file = nexus_station_session.dir / "context.jsonl"
     invalidate_sessions_cache()
     invalidate_work_dirs_cache()
@@ -433,7 +379,7 @@ class UploadSessionFileResponse(BaseModel):
 async def upload_session_file(
     session_id: UUID,
     file: UploadFile,
-    runner: NexusCLIRunner = Depends(get_runner),
+    runner: KimiCLIRunner = Depends(get_runner),
 ) -> UploadSessionFileResponse:
     """Upload a file to a session."""
     session = get_editable_session(session_id, runner)
@@ -441,22 +387,13 @@ async def upload_session_file(
     upload_dir = session_dir / "uploads"
     upload_dir.mkdir(parents=True, exist_ok=True)
 
-    # Read file in chunks to avoid loading entire file into memory before size check
-    chunk_size = 8192
-    content = bytearray()
-    total_size = 0
-    while True:
-        chunk = await file.read(chunk_size)
-        if not chunk:
-            break
-        total_size += len(chunk)
-        if total_size > MAX_UPLOAD_SIZE:
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=f"File too large (max {MAX_UPLOAD_SIZE // 1024 // 1024}MB)",
-            )
-        content.extend(chunk)
-    content = bytes(content)
+    # Read and validate file size
+    content = await file.read()
+    if len(content) > MAX_UPLOAD_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File too large (max {MAX_UPLOAD_SIZE // 1024 // 1024}MB)",
+        )
 
     # Generate safe filename
     file_name = str(uuid4())
@@ -471,7 +408,7 @@ async def upload_session_file(
     return UploadSessionFileResponse(
         path=str(upload_path),
         filename=file_name,
-        size=total_size,
+        size=len(content),
     )
 
 
@@ -599,140 +536,13 @@ async def get_session_file(
         result.sort(key=lambda x: (cast(str, x["type"]), cast(str, x["name"])))
         return Response(content=json.dumps(result), media_type="application/json")
 
-    # Security: limit in-memory reads to avoid DoS
-    try:
-        file_size = file_path.stat().st_size
-    except OSError:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="File not accessible",
-        )
-    media_type, _ = mimetypes.guess_type(file_path.name)
-    if file_size > MAX_FILE_SIZE:
-        # Stream large files instead of loading into memory
-        encoded_filename = quote(file_path.name, safe="")
-        return FileResponse(
-            path=file_path,
-            media_type=media_type or "application/octet-stream",
-            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"},
-        )
-
     content = file_path.read_bytes()
+    media_type, _ = mimetypes.guess_type(file_path.name)
     encoded_filename = quote(file_path.name, safe="")
     return Response(
         content=content,
         media_type=media_type or "application/octet-stream",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{encoded_filename}"},
-    )
-
-
-@router.get(
-    "/{session_id}/folders/{path:path}",
-    summary="Download a directory from session work_dir as ZIP",
-)
-async def download_session_folder(
-    session_id: UUID,
-    path: str,
-    request: Request,
-) -> StreamingResponse:
-    """Download a directory from session work directory as a ZIP archive."""
-    session = load_session_by_id(session_id)
-    if session is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Session not found",
-        )
-
-    # Security check: prevent path traversal attacks using resolve()
-    work_dir = Path(str(session.nexus_station_session.work_dir)).resolve()
-    requested_path = work_dir / path
-    folder_path = requested_path.resolve()
-
-    # Check path traversal
-    if not folder_path.is_relative_to(work_dir):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid path: path traversal not allowed",
-        )
-
-    rel_path = folder_path.relative_to(work_dir)
-    restrict_sensitive_apis = getattr(request.app.state, "restrict_sensitive_apis", False)
-    max_path_depth = (
-        getattr(request.app.state, "max_public_path_depth", None) or DEFAULT_MAX_PUBLIC_PATH_DEPTH
-    )
-
-    # Additional security checks when restricting sensitive APIs
-    if restrict_sensitive_apis:
-        # Check for symlinks in the path
-        if _contains_symlink(requested_path, work_dir):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Symbolic links are not allowed in public mode.",
-            )
-
-        # Check if resolved path points to sensitive location
-        if _is_path_in_sensitive_location(folder_path):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access to sensitive system directories is not allowed.",
-            )
-
-    _ensure_public_file_access_allowed(rel_path, restrict_sensitive_apis, max_path_depth)
-
-    if not folder_path.exists():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Directory not found",
-        )
-
-    if not folder_path.is_dir():
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Path is not a directory",
-        )
-
-    # Build ZIP with size limit to prevent memory exhaustion
-    buf = io.BytesIO()
-    total_size = 0
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for file_path in sorted(folder_path.rglob("*")):
-            if file_path.is_file():
-                # Security: skip symlinks and sensitive files in public mode
-                if restrict_sensitive_apis:
-                    try:
-                        file_rel = file_path.relative_to(work_dir)
-                        if _contains_symlink(file_path, work_dir):
-                            continue
-                        if _is_sensitive_relative_path(file_rel):
-                            continue
-                        if _is_path_in_sensitive_location(file_path):
-                            continue
-                    except (ValueError, OSError):
-                        continue
-                # Enforce total ZIP size limit
-                try:
-                    file_size = file_path.stat().st_size
-                except OSError:
-                    continue
-                total_size += file_size
-                if total_size > MAX_ZIP_SIZE:
-                    raise HTTPException(
-                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                        detail=f"Directory too large to download (max {MAX_ZIP_SIZE // 1024 // 1024}MB)",
-                    )
-                try:
-                    arcname = str(file_path.relative_to(folder_path))
-                except ValueError:
-                    # Skip files that can't be relative to folder_path (e.g. symlinks outside)
-                    continue
-                zf.write(file_path, arcname=arcname)
-    buf.seek(0)
-
-    filename = f"{rel_path.name}.zip" if str(rel_path) != "." else "workspace.zip"
-    return StreamingResponse(
-        buf,
-        media_type="application/zip",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
@@ -752,7 +562,7 @@ def _update_last_session_id(session: JointSession) -> None:
 
 
 @router.delete("/{session_id}", summary="Delete a session")
-async def delete_session(session_id: UUID, runner: NexusCLIRunner = Depends(get_runner)) -> None:
+async def delete_session(session_id: UUID, runner: KimiCLIRunner = Depends(get_runner)) -> None:
     """Delete a session."""
     session = get_editable_session(session_id, runner)
     session_process = runner.get_session(session_id)
@@ -776,7 +586,7 @@ async def delete_session(session_id: UUID, runner: NexusCLIRunner = Depends(get_
 async def update_session(
     session_id: UUID,
     request: UpdateSessionRequest,
-    runner: NexusCLIRunner = Depends(get_runner),
+    runner: KimiCLIRunner = Depends(get_runner),
 ) -> Session:
     """Update a session (e.g., rename title or archive/unarchive)."""
     from nexus_station.session_state import load_session_state, save_session_state
@@ -813,596 +623,6 @@ async def update_session(
             detail="Failed to reload session after update",
         )
     return updated_session
-
-
-class SessionModelParamsRequest(BaseModel):
-    """Update per-session model parameters request."""
-
-    temperature: float | None = Field(default=None, ge=0.0, le=2.0)
-    top_p: float | None = Field(default=None, ge=0.0, le=1.0)
-    max_tokens: int | None = Field(default=None, ge=1, le=200_000)
-    thinking_keep: str | None = Field(default=None)
-
-
-@router.get("/{session_id}/model-params", summary="Get per-session model parameters")
-async def get_session_model_params(
-    session_id: UUID,
-    runner: NexusCLIRunner = Depends(get_runner),
-) -> dict[str, Any]:
-    """Get per-session model parameters. Returns empty values if not set."""
-    from nexus_station.session_state import load_session_state
-
-    session = get_editable_session(session_id, runner)
-    session_dir = session.nexus_station_session.dir
-    state = load_session_state(session_dir)
-    params = state.model_params
-    return {
-        "temperature": params.temperature if params else None,
-        "top_p": params.top_p if params else None,
-        "max_tokens": params.max_tokens if params else None,
-        "thinking_keep": params.thinking_keep if params else None,
-    }
-
-
-@router.put("/{session_id}/model-params", summary="Update per-session model parameters")
-async def update_session_model_params(
-    session_id: UUID,
-    request: SessionModelParamsRequest,
-    runner: NexusCLIRunner = Depends(get_runner),
-) -> dict[str, Any]:
-    """Update per-session model parameters. These override global env vars for this session."""
-    from nexus_station.session_state import load_session_state, save_session_state
-
-    session = get_editable_session(session_id, runner)
-    session_dir = session.nexus_station_session.dir
-    state = load_session_state(session_dir)
-
-    from nexus_station.session_state import ModelParams
-    state.model_params = ModelParams(
-        temperature=request.temperature,
-        top_p=request.top_p,
-        max_tokens=request.max_tokens,
-        thinking_keep=request.thinking_keep,
-    )
-    save_session_state(state, session_dir)
-
-    return {
-        "success": True,
-        "temperature": request.temperature,
-        "top_p": request.top_p,
-        "max_tokens": request.max_tokens,
-        "thinking_keep": request.thinking_keep,
-    }
-
-
-class GuardianSettingsRequest(BaseModel):
-    enabled: bool
-    model: str | None = Field(default=None)
-    forbidden_files: list[str] = Field(default_factory=list)
-
-
-@router.get("/{session_id}/guardian", summary="Get guardian AI settings")
-async def get_session_guardian(
-    session_id: UUID,
-    runner: NexusCLIRunner = Depends(get_runner),
-) -> dict[str, Any]:
-    """Get guardian AI dual-check settings for a session."""
-    from nexus_station.session_state import load_session_state
-
-    session = get_editable_session(session_id, runner)
-    session_dir = session.nexus_station_session.dir
-    state = load_session_state(session_dir)
-    return {
-        "enabled": state.guardian_enabled,
-        "model": state.guardian_model,
-        "forbidden_files": state.forbidden_files,
-    }
-
-
-@router.put("/{session_id}/guardian", summary="Update guardian AI settings")
-async def update_session_guardian(
-    session_id: UUID,
-    request: GuardianSettingsRequest,
-    runner: NexusCLIRunner = Depends(get_runner),
-) -> dict[str, Any]:
-    """Update guardian AI dual-check settings for a session."""
-    from nexus_station.session_state import load_session_state, save_session_state
-
-    session = get_editable_session(session_id, runner)
-    session_dir = session.nexus_station_session.dir
-    state = load_session_state(session_dir)
-    state.guardian_enabled = request.enabled
-    state.guardian_model = request.model
-    state.forbidden_files = request.forbidden_files
-    save_session_state(state, session_dir)
-    return {"success": True, "enabled": state.guardian_enabled, "model": state.guardian_model, "forbidden_files": state.forbidden_files}
-
-
-@router.get("/{session_id}/instructions", summary="Get instruction files for session")
-async def get_session_instructions(
-    session_id: UUID,
-    runner: NexusCLIRunner = Depends(get_runner),
-) -> dict[str, Any]:
-    """Discover AGENTS.md, skills, and other instruction files for a session.
-
-    Returns files with `auto_loaded` flag indicating whether Kimi CLI
-    picks them up automatically.
-    """
-    from nexus_station.utils.path import find_project_root
-
-    session = load_session_by_id(session_id)
-    if session is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-
-    work_dir = Path(str(session.nexus_station_session.work_dir)).resolve()
-    from kaos.path import KaosPath
-    work_dir_kaos = KaosPath.unsafe_from_local_path(work_dir)
-    project_root_kaos = await find_project_root(work_dir_kaos)
-    project_root = Path(str(project_root_kaos))
-
-    files: list[dict[str, Any]] = []
-
-    def _is_skill_path(path: Path) -> bool:
-        """Check if path is inside a skills directory."""
-        parts = [p.lower() for p in path.relative_to(work_dir).parts]
-        return (".nexus" in parts or ".agents" in parts or ".claude" in parts or ".codex" in parts) and "skills" in parts
-
-    def _is_agents_md(path: Path) -> bool:
-        """Check if file is an AGENTS.md (auto-discovered by Kimi CLI)."""
-        name = path.name.lower()
-        if name != "agents.md":
-            return False
-        # Direct AGENTS.md in any directory along the path
-        rel_parts = [p.lower() for p in path.relative_to(work_dir).parts]
-        # If it's directly in work_dir or parent dirs — auto_loaded
-        # If it's inside .nexus/ or .agents/ — also auto_loaded
-        return len(rel_parts) <= 2 or ".nexus" in rel_parts or ".agents" in rel_parts
-
-    def _is_builtin(path: Path) -> bool:
-        """Check if file is a builtin Kimi CLI skill (not project-specific)."""
-        try:
-            rel = path.relative_to(work_dir)
-            parts = [p.lower() for p in rel.parts]
-            # Builtin skills are those in .agents/skills/ or .nexus/skills/
-            # that live inside the Kimi CLI repo itself (work_dir == project_root)
-            if work_dir.resolve() == project_root.resolve():
-                return "skills" in parts and (".agents" in parts or ".nexus" in parts or ".claude" in parts or ".codex" in parts)
-        except ValueError:
-            pass
-        return False
-
-    def classify(path: Path) -> tuple[str, bool, bool]:
-        """Classify file and return (type, auto_loaded, is_builtin)."""
-        rel_parts = [p.lower() for p in path.relative_to(work_dir).parts]
-        is_blt = _is_builtin(path)
-
-        # AGENTS.md files — auto_loaded
-        if _is_agents_md(path):
-            return ("agents", True, is_blt)
-
-        # Skills inside .nexus/skills/ or .agents/skills/ — auto_loaded
-        if _is_skill_path(path) and path.name.lower() == "skill.md":
-            return ("skill", True, is_blt)
-
-        # Legacy / manual files
-        if ".nexus" in rel_parts or ".agents" in rel_parts:
-            if "prompts" in rel_parts:
-                return ("prompt", False, is_blt)
-            if "hooks" in rel_parts:
-                return ("hook", False, is_blt)
-            if "agents" in rel_parts:
-                return ("agent", False, is_blt)
-            if "plugins" in rel_parts:
-                return ("plugin", False, is_blt)
-
-        if path.name.lower().endswith(".skill.md"):
-            return ("skill", False, is_blt)
-        if path.name.lower().endswith(".prompt.md"):
-            return ("prompt", False, is_blt)
-
-        return ("instruction", False, is_blt)
-
-    # 1. AGENTS.md / agents.md along path from work_dir up to project_root
-    try:
-        current = work_dir
-        while True:
-            for name in ("AGENTS.md", "agents.md"):
-                candidate = current / name
-                if candidate.is_file():
-                    rel = candidate.relative_to(work_dir)
-                    ftype, auto, is_blt = classify(candidate)
-                    files.append({
-                        "path": str(rel),
-                        "full_path": str(candidate),
-                        "type": ftype,
-                        "name": name,
-                        "auto_loaded": auto,
-                        "is_builtin": is_blt,
-                    })
-            for dotdir in (".nexus", ".agents"):
-                agents = current / dotdir / "AGENTS.md"
-                if agents.is_file():
-                    rel = agents.relative_to(work_dir)
-                    ftype, auto, is_blt = classify(agents)
-                    files.append({
-                        "path": str(rel),
-                        "full_path": str(agents),
-                        "type": ftype,
-                        "name": f"{dotdir}/AGENTS.md",
-                        "auto_loaded": auto,
-                        "is_builtin": is_blt,
-                    })
-            if current.resolve() == project_root.resolve():
-                break
-            parent = current.parent
-            if parent == current:
-                break
-            current = parent
-    except Exception:
-        pass
-
-    # 2. Explicitly scan .nexus/skills/ and .agents/skills/ for SKILL.md
-    for subdir_name in (".nexus", ".agents", ".claude", ".codex"):
-        skills_dir = work_dir / subdir_name / "skills"
-        if not skills_dir.is_dir():
-            continue
-        for skill_root in skills_dir.iterdir():
-            if not skill_root.is_dir():
-                continue
-            skill_md = skill_root / "SKILL.md"
-            if skill_md.is_file():
-                rel = skill_md.relative_to(work_dir)
-                ftype, auto, is_blt = classify(skill_md)
-                files.append({
-                    "path": str(rel),
-                    "full_path": str(skill_md),
-                    "type": ftype,
-                    "name": "SKILL.md",
-                    "auto_loaded": auto,
-                    "is_builtin": is_blt,
-                })
-
-    # 3. .nexus/ and .agents/ other subdirectories under work_dir
-    for subdir_name in (".nexus", ".agents"):
-        subdir = work_dir / subdir_name
-        if not subdir.is_dir():
-            continue
-        for root, _dirs, filenames in os.walk(subdir, followlinks=False):
-            for fname in filenames:
-                if not fname.lower().endswith(".md"):
-                    continue
-                fpath = Path(root) / fname
-                try:
-                    rel = fpath.relative_to(work_dir)
-                except ValueError:
-                    continue
-                # Skip already found AGENTS.md and SKILL.md
-                if fname.lower() == "agents.md":
-                    continue
-                if fname.lower() == "skill.md" and _is_skill_path(fpath):
-                    continue
-                ftype, auto, is_blt = classify(fpath)
-                files.append({
-                    "path": str(rel),
-                    "full_path": str(fpath),
-                    "type": ftype,
-                    "name": fname,
-                    "auto_loaded": auto,
-                    "is_builtin": is_blt,
-                })
-
-    # Deduplicate by full_path
-    seen: set[str] = set()
-    unique_files: list[dict[str, Any]] = []
-    for f in files:
-        fp = f["full_path"]
-        if fp not in seen:
-            seen.add(fp)
-            unique_files.append(f)
-
-    # Sort: auto_loaded first, then by type, then by path
-    type_order = {"agents": 0, "skill": 1, "agent": 2, "prompt": 3, "hook": 4, "plugin": 5, "instruction": 6}
-    unique_files.sort(key=lambda x: (
-        0 if x.get("auto_loaded") else 1,
-        type_order.get(x["type"], 99),
-        x["path"],
-    ))
-
-    return {
-        "work_dir": str(work_dir),
-        "project_root": str(project_root),
-        "files": unique_files,
-    }
-
-
-class CreateInstructionRequest(BaseModel):
-    """Create a template instruction file."""
-
-    type: str = Field(..., description="Type: agents, skill, hook, prompt, agent")
-    name: str | None = Field(default=None, description="File name for skill/hook/prompt/agent")
-
-
-@router.post("/{session_id}/create-instruction", summary="Create a template instruction file")
-async def create_instruction_file(
-    session_id: UUID,
-    request: CreateInstructionRequest,
-    runner: NexusCLIRunner = Depends(get_runner),
-) -> dict[str, Any]:
-    """Create a template AGENTS.md, SKILL.md, hook, prompt or agent file in the session's work_dir."""
-    session = load_session_by_id(session_id)
-    if session is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-
-    work_dir = Path(str(session.nexus_station_session.work_dir)).resolve()
-
-    templates: dict[str, tuple[Path, str]] = {
-        "agents": (work_dir / "AGENTS.md", """# AGENTS.md — Правила для AI
-
-> Проект: {project}
-> Обновлено: {date}
-
-## Общие правила
-
-1. Весь код пиши на русском языке (комментарии, названия переменных)
-2. Не используй `sleep`, `watch`, бесконечные циклы в shell-командах
-3. Всегда делай бэкап перед изменением важных файлов
-4. Для логов: `tail -N файл`, никогда `sleep && tail`
-
-## Защищённые файлы
-
-- Не изменяй без разрешения: `ecosystem.config.js`, `db.js`, `app.js`, `.env`
-
-## Стиль кода
-
-- EJS: `<%= %>` для пользовательских данных, `<%- %>` только для доверенного HTML
-- CSRF: формы — поле `_csrf`, AJAX — заголовок `X-CSRF-Token`
-- Весь текст интерфейса — на русском
-"""),
-        "skill": (work_dir / ".nexus" / "skills" / (request.name or "my-skill") / "SKILL.md", """---
-name: {name}
-description: Описание навыка
----
-
-## {name}
-
-Когда использовать этот навык:
-
-1. Условие 1
-2. Условие 2
-
-### Пошаговые инструкции
-
-1. Шаг 1
-2. Шаг 2
-3. Шаг 3
-
-### Примеры
-
-```
-Пример кода или вывода
-```
-"""),
-        "hook": (work_dir / ".nexus" / "hooks" / (request.name or "my-hook.sh"), """#!/bin/bash
-# .nexus/hooks/{name}
-# Hook для автоматизации
-
-read JSON
-# echo "$JSON" | jq -r '.tool_name'
-
-# Выход 0 = разрешить, 2 = заблокировать
-exit 0
-"""),
-        "prompt": (work_dir / ".nexus" / "prompts" / (request.name or "my-prompt.prompt.md"), """# {name}
-
-## Контекст
-
-Опишите контекст использования этого промпта.
-
-## Инструкции
-
-1. Инструкция 1
-2. Инструкция 2
-
-## Ожидаемый результат
-
-Что должно получиться в результате.
-"""),
-        "agent": (work_dir / ".nexus" / "agents" / (request.name or "my-agent.agent.md"), """# {name}
-
-## Роль
-
-Опишите роль этого агента.
-
-## Возможности
-
-- Возможность 1
-- Возможность 2
-
-## Ограничения
-
-- Не делай X
-- Всегда делай Y
-"""),
-    }
-
-    if request.type not in templates:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unknown type: {request.type}. Supported: {', '.join(templates.keys())}",
-        )
-
-    # Security: sanitize name to prevent path traversal
-    if request.name:
-        if ".." in request.name or "/" in request.name or "\\" in request.name:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid name: path traversal not allowed",
-            )
-        # Also reject format-string injection attempts
-        if "{" in request.name or "}" in request.name:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid name: braces not allowed",
-            )
-
-    dest_path, template = templates[request.type]
-    dest_path.parent.mkdir(parents=True, exist_ok=True)
-
-    if dest_path.exists():
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"File already exists: {dest_path}",
-        )
-
-    try:
-        content = template.format(
-            project=work_dir.name,
-            date=datetime.now(UTC).strftime("%Y-%m-%d"),
-            name=request.name or "my-template",
-        )
-    except KeyError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid template variable: {e}",
-        ) from e
-    dest_path.write_text(content, encoding="utf-8")
-
-    return {
-        "success": True,
-        "path": str(dest_path.relative_to(work_dir)),
-        "full_path": str(dest_path),
-        "type": request.type,
-    }
-
-
-@router.post("/{session_id}/refactor-instructions", summary="Analyze and refactor instruction files")
-async def refactor_session_instructions(
-    session_id: UUID,
-    runner: NexusCLIRunner = Depends(get_runner),
-) -> dict[str, Any]:
-    """Analyze instruction files and suggest optimizations."""
-    from nexus_station.utils.path import find_project_root
-
-    session = load_session_by_id(session_id)
-    if session is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
-
-    work_dir = Path(str(session.nexus_station_session.work_dir)).resolve()
-    from kaos.path import KaosPath
-    work_dir_kaos = KaosPath.unsafe_from_local_path(work_dir)
-    project_root_kaos = await find_project_root(work_dir_kaos)
-    project_root = Path(str(project_root_kaos))
-
-    recommendations: list[dict[str, str]] = []
-    optimized_files: list[dict[str, Any]] = []
-    total_size = 0
-    agents_md_size = 0
-
-    # Collect instruction files (same logic as /instructions)
-    all_files: list[Path] = []
-    try:
-        current = work_dir
-        while True:
-            for name in ("AGENTS.md", "agents.md"):
-                candidate = current / name
-                if candidate.is_file():
-                    all_files.append(candidate)
-            for dotdir in (".nexus", ".agents"):
-                agents = current / dotdir / "AGENTS.md"
-                if agents.is_file():
-                    all_files.append(agents)
-            if current.resolve() == project_root.resolve():
-                break
-            parent = current.parent
-            if parent == current:
-                break
-            current = parent
-    except Exception:
-        pass
-
-    for subdir_name in (".nexus", ".agents"):
-        subdir = work_dir / subdir_name
-        if not subdir.is_dir():
-            continue
-        for root, _dirs, filenames in os.walk(subdir, followlinks=False):
-            for fname in filenames:
-                if fname.lower().endswith(".md"):
-                    all_files.append(Path(root) / fname)
-
-    # Deduplicate
-    seen: set[str] = set()
-    unique_files: list[Path] = []
-    for f in all_files:
-        fp = str(f.resolve())
-        if fp not in seen:
-            seen.add(fp)
-            unique_files.append(f)
-
-    # Analyze each file
-    for fpath in unique_files:
-        try:
-            content = fpath.read_text(encoding="utf-8")
-            size = len(content.encode("utf-8"))
-            total_size += size
-
-            is_agents = fpath.name.lower() == "agents.md"
-            if is_agents:
-                agents_md_size += size
-
-            recs: list[str] = []
-            if size > 32 * 1024 and is_agents:
-                recs.append(f"Файл превышает лимит 32 KB — Kimi CLI обрежет его. Разбейте на части или перенесите в .nexus/skills/")
-            if size > 100 * 1024:
-                recs.append(f"Очень большой файл ({size // 1024} KB). Рассмотрите разделение на модули.")
-            if content.count("#") > 50:
-                recs.append("Много заголовков — возможно, файл слишком раздут. Объедините похожие секции.")
-            if len([l for l in content.splitlines() if l.strip()]) < 10 and size > 500:
-                recs.append("Мало содержательных строк — возможно, много пустых строк или комментариев.")
-
-            if recs:
-                try:
-                    rel = fpath.relative_to(work_dir)
-                except ValueError:
-                    rel = fpath.name
-                recommendations.append({
-                    "file": str(rel),
-                    "message": "; ".join(recs),
-                })
-        except Exception:
-            pass
-
-    # General recommendations
-    if agents_md_size == 0:
-        recommendations.insert(0, {
-            "file": "Общее",
-            "message": "AGENTS.md не найден. Создайте его для задания правил поведения Kimi в этом проекте.",
-        })
-
-    if total_size > 100 * 1024:
-        recommendations.insert(0, {
-            "file": "Общее",
-            "message": f"Общий размер инструкций {total_size // 1024} KB. Большие инструкции замедляют старт сессии. Перенесите редкоиспользуемое в skills.",
-        })
-
-    summary_parts: list[str] = []
-    summary_parts.append(f"Найдено файлов: {len(unique_files)}")
-    summary_parts.append(f"Общий размер: {total_size // 1024} KB")
-    if agents_md_size > 0:
-        summary_parts.append(f"AGENTS.md: {agents_md_size // 1024} KB")
-    if len(recommendations) == 0:
-        summary_parts.append("Всё выглядит оптимально ✓")
-    else:
-        summary_parts.append(f"Рекомендаций: {len(recommendations)}")
-
-    return {
-        "success": True,
-        "summary": ". ".join(summary_parts),
-        "total_files": len(unique_files),
-        "total_size": total_size,
-        "agents_md_size": agents_md_size,
-        "recommendations": recommendations,
-        "optimized_files": optimized_files,
-    }
 
 
 def extract_first_turn_from_wire(session_dir: Path) -> tuple[str, str] | None:
@@ -1464,7 +684,7 @@ def extract_first_turn_from_wire(session_dir: Path) -> tuple[str, str] | None:
 async def fork_session_endpoint(
     session_id: UUID,
     request: ForkSessionRequest,
-    runner: NexusCLIRunner = Depends(get_runner),
+    runner: KimiCLIRunner = Depends(get_runner),
 ) -> Session:
     """Fork a session, creating a new session with history up to the specified turn.
 
@@ -1529,7 +749,7 @@ async def fork_session_endpoint(
 async def generate_session_title(
     session_id: UUID,
     request: GenerateTitleRequest | None = None,
-    runner: NexusCLIRunner = Depends(get_runner),
+    runner: KimiCLIRunner = Depends(get_runner),
 ) -> GenerateTitleResponse:
     """Generate a concise session title using AI based on the first conversation turn.
 
@@ -1663,7 +883,7 @@ Title:"""
 async def session_stream(
     session_id: UUID,
     websocket: WebSocket,
-    runner: NexusCLIRunner = Depends(get_runner_ws),
+    runner: KimiCLIRunner = Depends(get_runner_ws),
 ) -> None:
     """WebSocket stream for a session.
 
@@ -1886,8 +1106,15 @@ async def get_startup_dir(request: Request) -> str:
     return request.app.state.startup_dir
 
 
-async def _get_git_diff_for_dir(work_dir: Path) -> GitDiffStats:
-    """Get git diff stats for any directory."""
+@router.get("/{session_id}/git-diff", summary="Get git diff stats")
+async def get_session_git_diff(session_id: UUID) -> GitDiffStats:
+    """get git diff stats for the session's work directory"""
+    session = load_session_by_id(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    work_dir = Path(str(session.nexus_station_session.work_dir))
+
     # Check if it is a git repository
     if not (work_dir / ".git").exists():
         return GitDiffStats(is_git_repo=False)
@@ -1994,47 +1221,3 @@ async def _get_git_diff_for_dir(work_dir: Path) -> GitDiffStats:
         return GitDiffStats(is_git_repo=True, error="Git command timed out")
     except Exception as e:
         return GitDiffStats(is_git_repo=True, error=str(e))
-
-
-@router.get("/{session_id}/history", summary="Get paginated wire history")
-async def get_session_history(
-    session_id: UUID,
-    offset: int = 0,
-    limit: int = 200,
-) -> dict[str, Any]:
-    """Return a slice of wire events from the session's wire.jsonl.
-
-    Args:
-        offset: Number of events to skip from the start.
-        limit: Maximum number of events to return (max 500).
-    """
-    session = load_session_by_id(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    wire_file = session.nexus_station_session.dir / "wire.jsonl"
-    if not wire_file.exists():
-        return {"events": [], "total": 0, "offset": offset, "limit": limit}
-
-    if limit <= 0:
-        limit = 200
-    if limit > 500:
-        limit = 500
-    if offset < 0:
-        offset = 0
-
-    lines, total = await asyncio.to_thread(
-        _read_wire_lines, wire_file, max_messages=limit, offset=offset
-    )
-    return {"events": [json.loads(line) for line in lines], "total": total, "offset": offset, "limit": limit}
-
-
-@router.get("/{session_id}/git-diff", summary="Get git diff stats")
-async def get_session_git_diff(session_id: UUID) -> GitDiffStats:
-    """get git diff stats for the session's work directory"""
-    session = load_session_by_id(session_id)
-    if session is None:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    work_dir = Path(str(session.nexus_station_session.work_dir))
-    return await _get_git_diff_for_dir(work_dir)

@@ -41,7 +41,7 @@ class WorkDirMeta(BaseModel):
 
 
 class Metadata(BaseModel):
-    """Kimi metadata structure."""
+    """NEXUS metadata structure."""
 
     model_config = ConfigDict(extra="ignore")
 

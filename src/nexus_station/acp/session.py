@@ -15,7 +15,7 @@ from nexus_station.acp.convert import (
     tool_result_to_acp_content,
 )
 from nexus_station.acp.types import ACPContentBlock
-from nexus_station.app import NexusCLI
+from nexus_station.app import KimiCLI
 from nexus_station.soul import LLMNotSet, LLMNotSupported, MaxStepsReached, RunCancelled
 from nexus_station.tools import extract_key_argument
 from nexus_station.utils.logging import logger
@@ -34,6 +34,7 @@ from nexus_station.wire.types import (
     SteerInput,
     StepBegin,
     StepInterrupted,
+    StepRetry,
     SubagentEvent,
     TextPart,
     ThinkPart,
@@ -122,7 +123,7 @@ class ACPSession:
     def __init__(
         self,
         id: str,
-        cli: NexusCLI,
+        cli: KimiCLI,
         acp_conn: acp.Client,
         kaos: Kaos | None = None,
     ) -> None:
@@ -138,7 +139,7 @@ class ACPSession:
         return self._id
 
     @property
-    def cli(self) -> NexusCLI:
+    def cli(self) -> KimiCLI:
         """The NEXUS Station instance bound to this ACP session."""
         return self._cli
 
@@ -169,6 +170,8 @@ class ACPSession:
                         pass
                     case StepInterrupted():
                         break
+                    case StepRetry():
+                        pass
                     case CompactionBegin():
                         pass
                     case CompactionEnd():

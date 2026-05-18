@@ -1,4 +1,4 @@
-"""Auth API routes for Kimi Next."""
+"""Auth API routes for NEXUS Next."""
 
 from __future__ import annotations
 

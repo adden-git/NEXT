@@ -31,7 +31,7 @@ import {
   ToolMediaPreview,
   ToolOutput,
 } from "@ai-elements";
-import { BrainIcon, ChevronRightIcon } from "@/components/nexus-icons";
+import { BrainIcon, ChevronRightIcon, Shield, CheckIcon, XIcon, AlertTriangle } from "@/components/nexus-icons";
 
 export type ToolApproval = NonNullable<LiveMessage["toolCall"]>["approval"];
 
@@ -43,6 +43,67 @@ export type AssistantApprovalHandler = (
 const assistantContentClass =
   "w-full max-w-full text-sm leading-relaxed overflow-visible";
 const assistantMetaTextClass = "text-xs text-muted-foreground";
+
+type GuardianExtras = {
+  action: string;
+  reason?: string;
+  risk?: string;
+  thinking?: string;
+  data?: Record<string, unknown> | null;
+} | null;
+
+const GuardianCheck = ({ guardian }: { guardian: GuardianExtras }) => {
+  const [showThinking, setShowThinking] = useState(false);
+  if (!guardian) return null;
+
+  const risk = guardian.risk || "low";
+  const action = guardian.action;
+
+  const riskConfig: Record<string, { icon: React.ReactNode; color: string; label: string }> = {
+    low: { icon: <CheckIcon className="size-3" />, color: "text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-950/50", label: "Safe" },
+    medium: { icon: <AlertTriangle className="size-3" />, color: "text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/50", label: "Medium risk" },
+    high: { icon: <AlertTriangle className="size-3" />, color: "text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-950/50", label: "High risk" },
+    critical: { icon: <XIcon className="size-3" />, color: "text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/50", label: "Critical" },
+  };
+
+  const config = riskConfig[risk] || riskConfig.low;
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className={cn("flex items-center gap-1.5 rounded px-2 py-1 text-[11px] font-medium", config.color)}>
+        <Shield className="size-3 shrink-0" />
+        <span>Guardian AI</span>
+        <span className="opacity-70">·</span>
+        <span className="flex items-center gap-1">
+          {config.icon}
+          {config.label}
+        </span>
+        {guardian.reason ? (
+          <span className="opacity-70 truncate max-w-[200px]">{guardian.reason}</span>
+        ) : null}
+        {action === "block" && (
+          <span className="text-red-600 dark:text-red-400 font-semibold">· Blocked</span>
+        )}
+        {guardian.thinking ? (
+          <button
+            type="button"
+            onClick={() => setShowThinking((v) => !v)}
+            className="ml-auto flex items-center gap-0.5 opacity-70 hover:opacity-100 cursor-pointer"
+            title="Toggle reasoning"
+          >
+            <BrainIcon className="size-3" />
+            <span>{showThinking ? "Hide" : "Reasoning"}</span>
+          </button>
+        ) : null}
+      </div>
+      {showThinking && guardian.thinking ? (
+        <div className="ml-4 rounded border border-border/50 bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground whitespace-pre-wrap">
+          {guardian.thinking}
+        </div>
+      ) : null}
+    </div>
+  );
+};
 
 type AssistantMessageProps = {
   message: LiveMessage;
@@ -222,6 +283,7 @@ const renderToolMessage = ({
           type={toolCall.type}
           input={toolCall.input}
         />
+        <GuardianCheck guardian={(toolCall.extras?.guardian as GuardianExtras) ?? null} />
         <ToolContent>
           {toolCall.input ? <ToolInput input={toolCall.input} /> : null}
           <ToolDisplay display={toolCall.display} isError={toolCall.isError} />

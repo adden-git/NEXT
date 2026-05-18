@@ -27,7 +27,7 @@ from uuid import UUID
 from pydantic import ConfigDict, Field
 
 from nexus_station.metadata import WorkDirMeta, load_metadata
-from nexus_station.session import Session as NexusCLISession
+from nexus_station.session import Session as KimiCLISession
 from nexus_station.session_state import SessionState, load_session_state, save_session_state
 from nexus_station.web.models import Session
 from nexus_station.wire.file import WireFile
@@ -58,11 +58,11 @@ def invalidate_sessions_cache() -> None:
 
 
 class JointSession(Session):
-    """Combined session model with both web UI and nexus-station session data."""
+    """Combined session model with both web UI and kimi-cli session data."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    nexus_station_session: NexusCLISession = Field(exclude=True)
+    nexus_station_session: KimiCLISession = Field(exclude=True)
 
 
 @dataclass(slots=True)
@@ -83,7 +83,7 @@ def _derive_title_from_wire(session_dir: Path) -> str:
         return "Untitled"
 
     try:
-        from nexus_station.web.utils._json import json
+        import json
 
         from kosong.message import Message
 
@@ -150,10 +150,10 @@ def _ensure_title(entry: SessionIndexEntry, *, refresh: bool) -> None:
     entry.title = _derive_title_from_wire(entry.session_dir)
 
 
-def _build_kimi_session(entry: SessionIndexEntry) -> NexusCLISession:
+def _build_kimi_session(entry: SessionIndexEntry) -> KimiCLISession:
     from kaos.path import KaosPath
 
-    return NexusCLISession(
+    return KimiCLISession(
         id=str(entry.session_id),
         work_dir=KaosPath.unsafe_from_local_path(Path(entry.work_dir)),
         work_dir_meta=entry.work_dir_meta,

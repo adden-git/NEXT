@@ -10,7 +10,7 @@ from kosong.message import Message
 from nexus_station.notifications import is_notification_message
 
 if TYPE_CHECKING:
-    from nexus_station.soul.nexussoul import NexusSoul
+    from nexus_station.soul.kimisoul import KimiSoul
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,7 +33,7 @@ class DynamicInjectionProvider(ABC):
     async def get_injections(
         self,
         history: Sequence[Message],
-        soul: NexusSoul,
+        soul: KimiSoul,
     ) -> list[DynamicInjection]: ...
 
     async def on_context_compacted(self) -> None:

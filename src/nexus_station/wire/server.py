@@ -14,7 +14,7 @@ from kosong.utils.typing import JsonType
 from nexus_station.approval_runtime import ApprovalRuntime
 from nexus_station.constant import USER_AGENT
 from nexus_station.soul import LLMNotSet, LLMNotSupported, MaxStepsReached, RunCancelled, Soul, run_soul
-from nexus_station.soul.nexussoul import NexusSoul
+from nexus_station.soul.kimisoul import KimiSoul
 from nexus_station.soul.toolset import NexusToolset, WireExternalTool
 from nexus_station.utils.aioqueue import Queue, QueueShutDown
 from nexus_station.utils.logging import logger
@@ -106,7 +106,7 @@ class WireServer:
 
     @property
     def _approval_runtime(self) -> ApprovalRuntime | None:
-        if isinstance(self._soul, NexusSoul):
+        if isinstance(self._soul, KimiSoul):
             return self._soul.runtime.approval_runtime
         return None
 
@@ -115,7 +115,7 @@ class WireServer:
 
         self._reader, self._writer = await acp.stdio_streams(limit=STDIO_BUFFER_LIMIT)
         self._write_task = asyncio.create_task(self._write_loop())
-        if isinstance(self._soul, NexusSoul) and self._soul.runtime.root_wire_hub is not None:
+        if isinstance(self._soul, KimiSoul) and self._soul.runtime.root_wire_hub is not None:
             self._root_hub_queue = self._soul.runtime.root_wire_hub.subscribe()
             self._root_hub_task = asyncio.create_task(self._root_hub_loop())
         stop_event = asyncio.Event()
@@ -332,7 +332,7 @@ class WireServer:
                 await self._root_hub_task
             self._root_hub_task = None
         if (
-            isinstance(self._soul, NexusSoul)
+            isinstance(self._soul, KimiSoul)
             and self._root_hub_queue is not None
             and self._soul.runtime.root_wire_hub is not None
         ):
@@ -401,7 +401,7 @@ class WireServer:
         accepted: list[str] = []
         rejected: list[dict[str, str]] = []
         toolset = None
-        if isinstance(self._soul, NexusSoul) and isinstance(self._soul.agent.toolset, NexusToolset):
+        if isinstance(self._soul, KimiSoul) and isinstance(self._soul.agent.toolset, NexusToolset):
             toolset = self._soul.agent.toolset
 
         if toolset and msg.params.external_tools:
@@ -607,7 +607,7 @@ class WireServer:
 
             set_client_info(name=client.name, version=client.version)
 
-        if not isinstance(self._soul, NexusSoul):
+        if not isinstance(self._soul, KimiSoul):
             return
         llm = self._soul.runtime.llm
         if llm is None:
@@ -629,7 +629,7 @@ class WireServer:
             nexus_stationent._custom_headers = headers  # pyright: ignore[reportPrivateUsage]
 
     def _track_session_started(self, client: ClientInfo | None) -> None:
-        if not isinstance(self._soul, NexusSoul):
+        if not isinstance(self._soul, KimiSoul):
             return
 
         from nexus_station.telemetry import track_session_started_once
@@ -657,7 +657,7 @@ class WireServer:
             self._track_session_started(None)
 
         self._cancel_event = asyncio.Event()
-        runtime = self._soul.runtime if isinstance(self._soul, NexusSoul) else None
+        runtime = self._soul.runtime if isinstance(self._soul, KimiSoul) else None
         try:
             await run_soul(
                 self._soul,
@@ -756,7 +756,7 @@ class WireServer:
     async def _handle_steer(
         self, msg: JSONRPCSteerMessage
     ) -> JSONRPCSuccessResponse | JSONRPCErrorResponse:
-        if not isinstance(self._soul, NexusSoul) or not self._is_streaming:
+        if not isinstance(self._soul, KimiSoul) or not self._is_streaming:
             return JSONRPCErrorResponse(
                 id=msg.id,
                 error=JSONRPCErrorObject(
@@ -774,7 +774,7 @@ class WireServer:
     async def _handle_set_plan_mode(
         self, msg: JSONRPCSetPlanModeMessage
     ) -> JSONRPCSuccessResponse | JSONRPCErrorResponse:
-        if not isinstance(self._soul, NexusSoul):
+        if not isinstance(self._soul, KimiSoul):
             return JSONRPCErrorResponse(
                 id=msg.id,
                 error=JSONRPCErrorObject(
@@ -805,7 +805,7 @@ class WireServer:
                 ),
             )
 
-        wire_file = self._soul.wire_file if isinstance(self._soul, NexusSoul) else None
+        wire_file = self._soul.wire_file if isinstance(self._soul, KimiSoul) else None
 
         self._cancel_event = asyncio.Event()
         events = 0

@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import os
+import platform
 import re
 import shlex
+import shutil
+import stat
 import subprocess
+import tarfile
+import tempfile
 from enum import Enum, auto
 from pathlib import Path
 
@@ -17,14 +21,12 @@ from nexus_station.ui.shell.console import console
 from nexus_station.utils.aiohttp import new_client_session
 from nexus_station.utils.logging import logger
 
-GITHUB_REPO = "adden-git/NEXT"
-LATEST_VERSION_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-CHANGELOG_URL = f"https://github.com/{GITHUB_REPO}/releases"
+BASE_URL = "https://cdn.kimi.com/binaries/kimi-cli"
+LATEST_VERSION_URL = f"{BASE_URL}/latest"
+INSTALL_DIR = Path.home() / ".local" / "bin"
 
-# Upgrade command shown in toast notifications.
-# Detects the project root from the current file location.
-_ProjectRoot = Path(__file__).resolve().parents[4]
-UPGRADE_COMMAND = f"cd {_ProjectRoot} && git pull origin main && python3 setup.py --auto"
+# Upgrade command shown in toast notifications. Can be overridden by wrappers
+UPGRADE_COMMAND = "uv tool upgrade kimi-cli"
 
 
 class UpdateResult(Enum):
@@ -51,20 +53,34 @@ def semver_tuple(version: str) -> tuple[int, int, int]:
     return (major, minor, patch)
 
 
+def _detect_target() -> str | None:
+    sys_name = platform.system()
+    mach = platform.machine()
+    if mach in ("x86_64", "amd64", "AMD64"):
+        arch = "x86_64"
+    elif mach in ("arm64", "aarch64"):
+        arch = "aarch64"
+    else:
+        logger.error("Unsupported architecture: {mach}", mach=mach)
+        return None
+    if sys_name == "Darwin":
+        os_name = "apple-darwin"
+    elif sys_name == "Linux":
+        os_name = "unknown-linux-gnu"
+    else:
+        logger.error("Unsupported OS: {sys_name}", sys_name=sys_name)
+        return None
+    return f"{arch}-{os_name}"
+
+
 async def _get_latest_version(session: aiohttp.ClientSession) -> str | None:
     try:
         async with session.get(LATEST_VERSION_URL) as resp:
-            if resp.status == 404:
-                logger.debug("No releases found on GitHub.")
-                return None
             resp.raise_for_status()
-            data = await resp.json()
-            tag = data.get("tag_name", "").strip()
-            if tag.startswith("v"):
-                tag = tag[1:]
-            return tag or None
+            data = await resp.text()
+            return data.strip()
     except (TimeoutError, aiohttp.ClientError):
-        logger.exception("Failed to get latest version from GitHub:")
+        logger.exception("Failed to get latest version:")
         return None
 
 
@@ -75,6 +91,8 @@ async def do_update(*, print: bool = True, check_only: bool = False) -> UpdateRe
 
 LATEST_VERSION_FILE = get_share_dir() / "latest_version.txt"
 SKIPPED_VERSION_FILE = get_share_dir() / "skipped_version.txt"
+CHANGELOG_URL_ZH = "https://moonshotai.github.io/kimi-cli/zh/release-notes/changelog.html"
+CHANGELOG_URL_EN = "https://moonshotai.github.io/kimi-cli/en/release-notes/changelog.html"
 
 
 def _read_key() -> str:
@@ -139,19 +157,21 @@ def _run_update_gate(current_version: str, latest_version: str) -> None:
     from rich.text import Text
 
     body = Text.assemble(
-        ("  Текущая версия    ", ""),
+        ("  Current version   ", ""),
         (current_version + "\n", ""),
-        ("  Последняя версия  ", ""),
+        ("  Latest version    ", ""),
         (latest_version + "\n\n", "bold green"),
-        ("  Что нового:\n", ""),
-        ("    · ", ""),
-        (CHANGELOG_URL + "\n", "dodger_blue1"),
+        ("  What's new:\n", ""),
+        ("    · [中文]    ", ""),
+        (CHANGELOG_URL_ZH + "\n", "dodger_blue1"),
+        ("    · [English] ", ""),
+        (CHANGELOG_URL_EN + "\n", "dodger_blue1"),
     )
     console.print()
     console.print(
         Panel(
             body,
-            title="[bold]Доступно обновление NEXUS Station[/bold]",
+            title="[bold]kimi-cli update available[/bold]",
             border_style="yellow",
             expand=False,
             padding=(1, 2),
@@ -162,13 +182,13 @@ def _run_update_gate(current_version: str, latest_version: str) -> None:
         Text.assemble(
             "  ",
             ("[Enter]", "bold"),
-            "  Обновить сейчас  ",
+            "  Upgrade now  ",
             (f"({UPGRADE_COMMAND})", "grey50"),
         )
     )
-    console.print(Text.assemble("  ", ("[q]", "bold"), "      Не сейчас, напомнить позже"))
+    console.print(Text.assemble("  ", ("[q]", "bold"), "      Not now, remind me next time"))
     console.print(
-        Text.assemble("  ", ("[s]", "bold"), f"      Пропустить версию {latest_version}")
+        Text.assemble("  ", ("[s]", "bold"), f"      Skip reminders for version {latest_version}")
     )
     console.print(Rule(style="grey50"))
     console.print()
@@ -177,25 +197,25 @@ def _run_update_gate(current_version: str, latest_version: str) -> None:
     console.print()
 
     if key in ("\r", "\n"):
-        console.print(f"[grey50]Выполняется: {UPGRADE_COMMAND}[/grey50]\n")
+        console.print(f"[grey50]Running: {UPGRADE_COMMAND}[/grey50]\n")
         try:
-            result = subprocess.run(UPGRADE_COMMAND, shell=True)
+            result = subprocess.run(shlex.split(UPGRADE_COMMAND))
         except OSError:
             console.print()
-            console.print("[red]Ошибка обновления. Выполните вручную:[/red]")
+            console.print("[red]Upgrade failed. Please try running manually:[/red]")
             console.print(f"  {UPGRADE_COMMAND}")
             sys.exit(1)
         console.print()
         if result.returncode == 0:
-            console.print("[green]Обновление завершено! Перезапустите NEXUS Station.[/green]")
+            console.print("[green]Upgrade complete! Run kimi-cli to start the new version.[/green]")
         else:
-            console.print("[red]Ошибка обновления. Выполните вручную:[/red]")
+            console.print("[red]Upgrade failed. Please try running manually:[/red]")
             console.print(f"  {UPGRADE_COMMAND}")
         sys.exit(result.returncode)
     elif key in ("s", "S"):
         with contextlib.suppress(OSError):
             SKIPPED_VERSION_FILE.write_text(latest_version, encoding="utf-8")
-        console.print(f"[grey50]Напоминания о версии {latest_version} отключены.[/grey50]\n")
+        console.print(f"[grey50]Reminders skipped for version {latest_version}.[/grey50]\n")
     elif key in ("\x03", "\x1b"):
         sys.exit(0)
     # q/Q/other: fall through, continue startup
@@ -208,14 +228,20 @@ async def _do_update(*, print: bool, check_only: bool) -> UpdateResult:
         if print:
             console.print(message)
 
-    timeout = aiohttp.ClientTimeout(total=30, sock_read=10, sock_connect=10)
-    async with new_client_session(timeout=timeout) as session:
-        logger.info("Checking for updates from GitHub...")
-        _print("Проверка обновлений с GitHub...")
+    target = _detect_target()
+    if not target:
+        _print("[red]Failed to detect target platform.[/red]")
+        return UpdateResult.UNSUPPORTED
+
+    # Version check is fast, but the binary download can be large on slow links.
+    download_timeout = aiohttp.ClientTimeout(total=600, sock_read=60, sock_connect=15)
+    async with new_client_session(timeout=download_timeout) as session:
+        logger.info("Checking for updates...")
+        _print("Checking for updates...")
         latest_version = await _get_latest_version(session)
-        if latest_version is None:
-            _print("[grey50]Нет доступных релизов на GitHub.[/grey50]")
-            return UpdateResult.UP_TO_DATE
+        if not latest_version:
+            _print("[red]Failed to check for updates.[/red]")
+            return UpdateResult.FAILED
 
         logger.debug("Latest version: {latest_version}", latest_version=latest_version)
         LATEST_VERSION_FILE.write_text(latest_version, encoding="utf-8")
@@ -225,7 +251,7 @@ async def _do_update(*, print: bool, check_only: bool) -> UpdateResult:
 
         if cur_t >= lat_t:
             logger.debug("Already up to date: {current_version}", current_version=current_version)
-            _print("[green]Уже последняя версия.[/green]")
+            _print("[green]Already up to date.[/green]")
             return UpdateResult.UP_TO_DATE
 
         if check_only:
@@ -234,7 +260,7 @@ async def _do_update(*, print: bool, check_only: bool) -> UpdateResult:
                 current_version=current_version,
                 latest_version=latest_version,
             )
-            _print(f"[yellow]Доступно обновление: {latest_version}[/yellow]")
+            _print(f"[yellow]Update available: {latest_version}[/yellow]")
             return UpdateResult.UPDATE_AVAILABLE
 
         logger.info(
@@ -242,22 +268,72 @@ async def _do_update(*, print: bool, check_only: bool) -> UpdateResult:
             current_version=current_version,
             latest_version=latest_version,
         )
-        _print(f"Обновление с {current_version} до {latest_version}...")
+        _print(f"Updating from {current_version} to {latest_version}...")
 
-        try:
-            result = subprocess.run(UPGRADE_COMMAND, shell=True, capture_output=True, text=True)
-        except Exception:
-            logger.exception("Failed to run upgrade command:")
-            _print("[red]Ошибка выполнения команды обновления.[/red]")
-            return UpdateResult.FAILED
+        filename = f"kimi-{latest_version}-{target}.tar.gz"
+        download_url = f"{BASE_URL}/{latest_version}/{filename}"
 
-        if result.returncode != 0:
-            logger.error("Upgrade failed: {stderr}", stderr=result.stderr)
-            _print("[red]Ошибка обновления.[/red]")
-            return UpdateResult.FAILED
+        with tempfile.TemporaryDirectory(prefix="kimi-cli-") as tmpdir:
+            tar_path = os.path.join(tmpdir, filename)
 
-    _print("[green]Обновление успешно![/green]")
-    _print("[yellow]Перезапустите NEXUS Station для применения изменений.[/yellow]")
+            logger.info("Downloading from {download_url}...", download_url=download_url)
+            _print("[grey50]Downloading...[/grey50]")
+            try:
+                async with session.get(download_url) as resp:
+                    resp.raise_for_status()
+                    with open(tar_path, "wb") as f:
+                        async for chunk in resp.content.iter_chunked(1024 * 64):
+                            if chunk:
+                                f.write(chunk)
+            except (TimeoutError, aiohttp.ClientError):
+                logger.exception(
+                    "Failed to download update from {download_url}",
+                    download_url=download_url,
+                )
+                _print("[red]Failed to download.[/red]")
+                return UpdateResult.FAILED
+            except Exception:
+                logger.exception("Failed to download:")
+                _print("[red]Failed to download.[/red]")
+                return UpdateResult.FAILED
+
+            logger.info("Extracting archive {tar_path}...", tar_path=tar_path)
+            _print("[grey50]Extracting...[/grey50]")
+            try:
+                with tarfile.open(tar_path, "r:gz") as tar:
+                    tar.extractall(tmpdir)
+                binary_path = None
+                for root, _, files in os.walk(tmpdir):
+                    if "kimi" in files:
+                        binary_path = os.path.join(root, "kimi")
+                        break
+                if not binary_path:
+                    logger.error("Binary 'kimi' not found in archive.")
+                    _print("[red]Binary 'kimi' not found in archive.[/red]")
+                    return UpdateResult.FAILED
+            except Exception:
+                logger.exception("Failed to extract archive:")
+                _print("[red]Failed to extract archive.[/red]")
+                return UpdateResult.FAILED
+
+            INSTALL_DIR.mkdir(parents=True, exist_ok=True)
+            dest_path = INSTALL_DIR / "kimi"
+            logger.info("Installing to {dest_path}...", dest_path=dest_path)
+            _print("[grey50]Installing...[/grey50]")
+
+            try:
+                shutil.copy2(binary_path, dest_path)
+                os.chmod(
+                    dest_path,
+                    os.stat(dest_path).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH,
+                )
+            except Exception:
+                logger.exception("Failed to install:")
+                _print("[red]Failed to install.[/red]")
+                return UpdateResult.FAILED
+
+    _print("[green]Updated successfully![/green]")
+    _print("[yellow]Restart NEXUS Station to use the new version.[/yellow]")
     return UpdateResult.UPDATED
 
 
@@ -265,8 +341,8 @@ async def _do_update(*, print: bool, check_only: bool) -> UpdateResult:
 # async def update(app: "Shell", args: list[str]):
 #     """Check for updates"""
 #     await do_update(print=True)
-#
-#
+
+
 # @meta_command(name="check-update")
 # async def check_update(app: "Shell", args: list[str]):
 #     """Check for updates"""

@@ -10,7 +10,7 @@ from nexus_station.soul.agent import Runtime
 from nexus_station.tools.file.utils import MEDIA_SNIFF_BYTES, detect_file_type
 from nexus_station.tools.utils import load_desc, truncate_line
 from nexus_station.utils.logging import logger
-from nexus_station.utils.path import is_within_workspace
+from nexus_station.utils.path import is_within_workspace, kaos_path_from_user_input
 from nexus_station.utils.sensitive import is_sensitive_file
 
 MAX_LINES = 1000
@@ -75,7 +75,7 @@ class ReadFile(CallableTool2[Params]):
         )
         super().__init__(description=description)
         self._runtime = runtime
-        self._work_dir = runtime.builtin_args.NEXUS_WORK_DIR
+        self._work_dir = runtime.builtin_args.KIMI_WORK_DIR
         self._additional_dirs = runtime.additional_dirs
 
     async def _validate_path(self, path: KaosPath) -> ToolError | None:
@@ -106,7 +106,7 @@ class ReadFile(CallableTool2[Params]):
             )
 
         try:
-            p = KaosPath(params.path).expanduser()
+            p = kaos_path_from_user_input(params.path)
             if err := await self._validate_path(p):
                 return err
             p = p.canonical()

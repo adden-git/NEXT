@@ -14,7 +14,7 @@ from nexus_station.tools.file.plan_mode import inspect_plan_edit_target
 from nexus_station.tools.utils import load_desc
 from nexus_station.utils.diff import build_diff_blocks
 from nexus_station.utils.logging import logger
-from nexus_station.utils.path import is_within_workspace
+from nexus_station.utils.path import is_within_workspace, kaos_path_from_user_input
 
 _BASE_DESCRIPTION = load_desc(Path(__file__).parent / "write.md")
 
@@ -44,7 +44,7 @@ class WriteFile(CallableTool2[Params]):
 
     def __init__(self, runtime: Runtime, approval: Approval):
         super().__init__()
-        self._work_dir = runtime.builtin_args.NEXUS_WORK_DIR
+        self._work_dir = runtime.builtin_args.KIMI_WORK_DIR
         self._additional_dirs = runtime.additional_dirs
         self._approval = approval
         self._plan_mode_checker: Callable[[], bool] | None = None
@@ -86,7 +86,7 @@ class WriteFile(CallableTool2[Params]):
             )
 
         try:
-            p = KaosPath(params.path).expanduser()
+            p = kaos_path_from_user_input(params.path)
 
             if err := await self._validate_path(p):
                 return err

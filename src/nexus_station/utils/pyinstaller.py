@@ -9,7 +9,11 @@ lazy_cli_hiddenimports = [
     for module_name, _attribute_name, _help_text in (LazySubcommandGroup.lazy_subcommands.values())
 ]
 
-hiddenimports = collect_submodules("nexus_station.tools") + lazy_cli_hiddenimports + ["setproctitle"]
+hiddenimports = (
+    collect_submodules("nexus_station.tools")
+    + lazy_cli_hiddenimports
+    + ["setproctitle", "nexus_station._build_info"]
+)
 datas = (
     collect_data_files(
         "nexus_station",

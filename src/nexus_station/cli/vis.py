@@ -1,10 +1,10 @@
-"""Vis command for Kimi Agent Tracing Visualizer."""
+"""Vis command for NEXUS Agent Tracing Visualizer."""
 
 from typing import Annotated
 
 import typer
 
-cli = typer.Typer(help="Run Kimi Agent Tracing Visualizer.")
+cli = typer.Typer(help="Run NEXUS Agent Tracing Visualizer.")
 
 
 @cli.callback(invoke_without_command=True)

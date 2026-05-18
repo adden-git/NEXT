@@ -16,7 +16,7 @@ from rich.text import Text
 from nexus_station.auth import KIMI_CODE_PLATFORM_ID
 from nexus_station.auth.platforms import get_platform_by_id, parse_managed_provider_key
 from nexus_station.config import LLMModel
-from nexus_station.soul.nexussoul import NexusSoul
+from nexus_station.soul.kimisoul import KimiSoul
 from nexus_station.ui.shell.console import console
 from nexus_station.ui.shell.slash import registry
 from nexus_station.utils.aiohttp import new_client_session
@@ -34,10 +34,10 @@ class UsageRow:
     reset_hint: str | None = None
 
 
-@registry.command(aliases=["/status"])
+@registry.command(aliases=["status"])
 async def usage(app: Shell, args: str):
     """Display API usage and quota information"""
-    assert isinstance(app.soul, NexusSoul)
+    assert isinstance(app.soul, KimiSoul)
     if app.soul.runtime.llm is None:
         console.print("[red]LLM not set. Please run /login first.[/red]")
         return
@@ -49,7 +49,7 @@ async def usage(app: Shell, args: str):
 
     usage_url = _usage_url(app.soul.runtime.llm.model_config)
     if usage_url is None:
-        console.print("[yellow]Usage is available on Kimi Code platform only.[/yellow]")
+        console.print("[yellow]Usage is available on NEXUS Code platform only.[/yellow]")
         return
 
     with console.status("[cyan]Fetching usage...[/cyan]"):
@@ -61,7 +61,7 @@ async def usage(app: Shell, args: str):
             if e.status == 401:
                 message = "Authorization failed. Please check your API key."
             elif e.status == 404:
-                message = "Usage endpoint not available. Try Kimi for Coding."
+                message = "Usage endpoint not available. Try NEXUS for Coding."
             console.print(f"[red]{message}[/red]")
             return
         except TimeoutError:

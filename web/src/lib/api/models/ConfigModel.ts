@@ -70,6 +70,24 @@ export interface ConfigModel {
      * @memberof ConfigModel
      */
     providerType: ProviderType;
+    /**
+     * Model category for UI grouping (code, text, image)
+     * @type {string}
+     * @memberof ConfigModel
+     */
+    category?: string | null;
+    /**
+     * Human-readable pricing info
+     * @type {string}
+     * @memberof ConfigModel
+     */
+    pricing?: string | null;
+    /**
+     * Pricing tier badge for UI (budget, standard, premium)
+     * @type {string}
+     * @memberof ConfigModel
+     */
+    pricingTier?: string | null;
 }
 
 
@@ -102,6 +120,9 @@ export function ConfigModelFromJSONTyped(json: any, ignoreDiscriminator: boolean
         'capabilities': json['capabilities'] == null ? undefined : (new Set((json['capabilities'] as Array<any>).map(ModelCapabilityFromJSON))),
         'name': json['name'],
         'providerType': ProviderTypeFromJSON(json['provider_type']),
+        'category': json['category'] == null ? undefined : json['category'],
+        'pricing': json['pricing'] == null ? undefined : json['pricing'],
+        'pricingTier': json['pricing_tier'] == null ? undefined : json['pricing_tier'],
     };
 }
 
@@ -122,6 +143,8 @@ export function ConfigModelToJSONTyped(value?: ConfigModel | null, ignoreDiscrim
         'capabilities': value['capabilities'] == null ? undefined : (Array.from(value['capabilities'] as Set<any>).map(ModelCapabilityToJSON)),
         'name': value['name'],
         'provider_type': ProviderTypeToJSON(value['providerType']),
+        'category': value['category'],
+        'pricing': value['pricing'],
+        'pricing_tier': value['pricingTier'],
     };
 }
-

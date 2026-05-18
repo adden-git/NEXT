@@ -8,11 +8,11 @@ from kosong.message import Message
 from nexus_station.soul.dynamic_injection import DynamicInjection, DynamicInjectionProvider
 
 if TYPE_CHECKING:
-    from nexus_station.soul.nexussoul import NexusSoul
+    from nexus_station.soul.kimisoul import KimiSoul
 
 _AFK_INJECTION_TYPE = "afk_mode"
 
-_AFK_PROMPT = (
+_AFK_PROMPT_ROOT = (
     "You are running in afk mode. No user is present to answer "
     "questions or approve actions. All tool calls are auto-approved by "
     "the harness.\n"
@@ -46,7 +46,7 @@ class AfkModeInjectionProvider(DynamicInjectionProvider):
     async def get_injections(
         self,
         history: Sequence[Message],
-        soul: NexusSoul,
+        soul: KimiSoul,
     ) -> list[DynamicInjection]:
         _ = history
         if not soul.is_afk:
@@ -54,10 +54,13 @@ class AfkModeInjectionProvider(DynamicInjectionProvider):
         if not soul.is_afk_flag:
             return []
 
+        if soul.is_subagent:
+            return []
+
         if self._injected:
             return []
         self._injected = True
-        return [DynamicInjection(type=_AFK_INJECTION_TYPE, content=_AFK_PROMPT)]
+        return [DynamicInjection(type=_AFK_INJECTION_TYPE, content=_AFK_PROMPT_ROOT)]
 
     async def on_context_compacted(self) -> None:
         # Compaction rewrites history; the prior afk reminder may have been

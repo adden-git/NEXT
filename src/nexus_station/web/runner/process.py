@@ -1,4 +1,4 @@
-"""Session process management for Kimi CLI web interface."""
+"""Session process management for NEXUS CLI web interface."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import asyncio
 import base64
 import contextlib
 import io
-from nexus_station.web.utils._json import json
+import json
 import mimetypes
 import sys
 import time
@@ -19,13 +19,6 @@ from uuid import UUID, uuid4
 from kosong.message import ContentPart, ImageURLPart, TextPart
 from PIL import Image
 from PIL.Image import Image as PILImage
-
-# Security: limit file sizes to prevent memory exhaustion
-MAX_UPLOADED_FILE_SIZE = 20 * 1024 * 1024  # 20MB
-MAX_STDERR_READ = 64 * 1024  # 64KB
-
-# Limit PIL image decompression to prevent bomb attacks
-Image.MAX_IMAGE_PIXELS = 100_000_000  # ~100MP
 from pydantic import TypeAdapter
 from starlette.websockets import WebSocket, WebSocketState
 
@@ -41,7 +34,6 @@ from nexus_station.web.models import (
 )
 from nexus_station.web.runner.messages import new_session_status_message
 from nexus_station.web.store.sessions import load_session_by_id
-from nexus_station.session_state import load_session_state
 from nexus_station.wire.jsonrpc import (
     JSONRPCCancelMessage,
     JSONRPCErrorObject,
@@ -60,12 +52,12 @@ JSONRPCOutMessageAdapter = TypeAdapter[JSONRPCOutMessage](JSONRPCOutMessage)
 
 
 class SessionProcess:
-    """Manages a single session's NexusCLI subprocess.
+    """Manages a single session's KimiCLI subprocess.
 
     Handles:
     - Starting/stopping the subprocess
-    - Reading from stdout (wire messages from NexusCLI)
-    - Writing to stdin (user input to NexusCLI)
+    - Reading from stdout (wire messages from KimiCLI)
+    - Writing to stdin (user input to KimiCLI)
     - Broadcasting messages to connected WebSockets
 
     Concurrency model:
@@ -190,7 +182,7 @@ class SessionProcess:
         detail: str | None = None,
         restart_started_at: float | None = None,
     ) -> None:
-        """Start the NexusCLI subprocess."""
+        """Start the KimiCLI subprocess."""
         async with self._lock:
             if self.is_alive:
                 if self._read_task is None or self._read_task.done():
@@ -214,32 +206,13 @@ class SessionProcess:
                     str(self.session_id),
                 ]
 
-            # Build env with per-session model params overriding global env
-            env = dict(get_clean_env())
-            try:
-                session = load_session_by_id(self.session_id)
-                if session is not None:
-                    state = load_session_state(session.nexus_station_session.dir)
-                    if state.model_params is not None:
-                        mp = state.model_params
-                        if mp.temperature is not None:
-                            env["KIMI_MODEL_TEMPERATURE"] = str(mp.temperature)
-                        if mp.top_p is not None:
-                            env["KIMI_MODEL_TOP_P"] = str(mp.top_p)
-                        if mp.max_tokens is not None:
-                            env["KIMI_MODEL_MAX_TOKENS"] = str(mp.max_tokens)
-                        if mp.thinking_keep is not None:
-                            env["KIMI_MODEL_THINKING_KEEP"] = mp.thinking_keep
-            except Exception:
-                pass  # Fall back to global env if state can't be read
-
             self._process = await asyncio.create_subprocess_exec(
                 *worker_cmd,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 limit=STREAM_LIMIT,
-                env=env,
+                env=get_clean_env(),
             )
 
             self._read_task = asyncio.create_task(self._read_loop())
@@ -330,7 +303,7 @@ class SessionProcess:
                     if self._process.stdout.at_eof():
                         if self._expecting_exit:
                             break
-                        stderr = await self._process.stderr.read(MAX_STDERR_READ)
+                        stderr = await self._process.stderr.read()
                         if not stderr:
                             stderr = b"No stderr"
                         # Clear in-flight IDs before broadcasting so that
@@ -487,9 +460,6 @@ class SessionProcess:
 
             if is_vision and mime_type.startswith("image/"):
                 try:
-                    # Security: skip files that are too large
-                    if file.stat().st_size > MAX_UPLOADED_FILE_SIZE:
-                        continue
                     content = file.read_bytes()
                     with Image.open(io.BytesIO(content)) as img:
                         pil_img: PILImage = img
@@ -521,9 +491,6 @@ class SessionProcess:
                 yield TextPart(text="</video>\n\n")
             elif ext in text_extensions or mime_type.startswith("text/"):
                 try:
-                    # Security: skip files that are too large
-                    if file.stat().st_size > MAX_UPLOADED_FILE_SIZE:
-                        continue
                     content = file.read_bytes()
                     text_content = content.decode("utf-8", errors="replace")
                     yield TextPart(text=f'<document path="{file_path}" content_type="{mime_type}">')
@@ -698,7 +665,7 @@ class SessionProcess:
         await process.stdin.drain()
 
 
-class NexusCLIRunner:
+class KimiCLIRunner:
     """Manages multiple session processes."""
 
     def __init__(self) -> None:

@@ -40,11 +40,11 @@ class SwitchToVis(Exception):
 cli = typer.Typer(
     cls=LazySubcommandGroup,
     epilog="""\b\
-Documentation:        https://moonshotai.github.io/nexus-station/\n
-LLM friendly version: https://moonshotai.github.io/nexus-station/llms.txt""",
+Documentation:        https://moonshotai.github.io/kimi-cli/\n
+LLM friendly version: https://moonshotai.github.io/kimi-cli/llms.txt""",
     add_completion=False,
     context_settings={"help_option_names": ["-h", "--help"]},
-    help="Kimi, your next CLI agent.",
+    help="NEXUS Station, your next CLI agent.",
 )
 
 UIMode = Literal["shell", "print", "acp", "wire"]
@@ -167,7 +167,7 @@ def kimi(
             file_okay=True,
             dir_okay=False,
             readable=True,
-            help="Config TOML/JSON file to load. Default: ~/.nexus/config.toml.",
+            help="Config TOML/JSON file to load. Default: ~/.kimi/config.toml.",
         ),
     ] = None,
     model_name: Annotated[
@@ -363,14 +363,14 @@ def kimi(
         ),
     ] = None,
 ):
-    """Kimi, your next CLI agent."""
+    """NEXUS Station, your next CLI agent."""
     import asyncio
     import contextlib
     import json
 
     from nexus_station.utils.proctitle import init_process_name
 
-    init_process_name("Kimi Code")
+    init_process_name("NEXUS Station")
 
     if ctx.invoked_subcommand is not None:
         return  # skip rest if a subcommand is invoked
@@ -380,7 +380,7 @@ def kimi(
     from kaos.path import KaosPath
 
     from nexus_station.agentspec import DEFAULT_AGENT_FILE, OKABE_AGENT_FILE
-    from nexus_station.app import NexusCLI, enable_logging
+    from nexus_station.app import KimiCLI, enable_logging
     from nexus_station.config import Config, load_config_from_string
     from nexus_station.exception import ConfigError
     from nexus_station.hooks import events as hook_events
@@ -393,7 +393,7 @@ def kimi(
 
     # Don't redirect stderr during argument parsing. Our stderr redirector
     # replaces fd=2 with a pipe, which would swallow Click/Typer startup errors.
-    # Redirection is installed later, right before NexusCLI.create(), so that
+    # Redirection is installed later, right before KimiCLI.create(), so that
     # MCP server stderr noise is captured into logs from the start.
     enable_logging(debug, redirect_stderr=False)
 
@@ -607,7 +607,7 @@ def kimi(
                 if changed:
                     session.save_state()
 
-            # Redirect stderr *before* NexusCLI.create() so that MCP server
+            # Redirect stderr *before* KimiCLI.create() so that MCP server
             # subprocesses (e.g. mcp-remote OAuth debug logs) write to the log
             # file instead of polluting the user's terminal.  CLI argument
             # parsing has already succeeded at this point, so Typer/Click
@@ -616,7 +616,7 @@ def kimi(
             # the saved original stderr fd.
             redirect_stderr_to_logger()
 
-            instance = await NexusCLI.create(
+            instance = await KimiCLI.create(
                 session,
                 config=config,
                 model_name=model_name,
@@ -909,7 +909,7 @@ def login(
         help="Emit OAuth events as JSON lines.",
     ),
 ) -> None:
-    """Login to your Kimi account."""
+    """Login to your NEXUS account."""
     import asyncio
 
     from rich.console import Console
@@ -968,7 +968,7 @@ def logout(
         help="Emit OAuth events as JSON lines.",
     ),
 ) -> None:
-    """Logout from your Kimi account."""
+    """Logout from your NEXUS account."""
     import asyncio
 
     from rich.console import Console
@@ -1035,7 +1035,7 @@ def background_task_worker(
     from nexus_station.background import run_background_task_worker
     from nexus_station.utils.proctitle import set_process_title
 
-    set_process_title("nexus-code-bg-worker")
+    set_process_title("kimi-code-bg-worker")
 
     from nexus_station.app import enable_logging
 
@@ -1058,7 +1058,7 @@ def web_worker(session_id: str) -> None:
 
     from nexus_station.utils.proctitle import set_process_title
 
-    set_process_title("nexus-code-worker")
+    set_process_title("kimi-code-worker")
 
     from nexus_station.app import enable_logging
     from nexus_station.web.runner.worker import run_worker

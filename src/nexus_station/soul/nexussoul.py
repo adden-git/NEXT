@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
@@ -80,6 +81,7 @@ from nexus_station.wire.types import (
     StepBegin,
     StepInterrupted,
     TextPart,
+    ToolCall,
     ToolResult,
     TurnBegin,
     TurnEnd,
@@ -620,6 +622,20 @@ class NexusSoul:
 
             wire_send(TurnBegin(user_input=user_input))
             turn_started = True
+
+            # --- Image generation mode: bypass LLM and generate directly ---
+            if (
+                self._runtime.llm is not None
+                and self._runtime.llm.model_config is not None
+                and self._runtime.llm.model_config.category == "image"
+            ):
+                prompt_text = user_input if isinstance(user_input, str) else Message(role="user", content=user_input).extract_text(" ")
+                await self._image_generation_turn(prompt_text.strip())
+                wire_send(TurnEnd())
+                turn_finished = True
+                return
+            # ---------------------------------------------------------------
+
             user_message = Message(role="user", content=user_input)
             text_input = user_message.extract_text(" ").strip()
 
@@ -696,6 +712,68 @@ class NexusSoul:
                 )
             if approval_source_token is not None:
                 reset_current_approval_source(approval_source_token)
+
+    async def _image_generation_turn(self, prompt: str) -> None:
+        """Bypass LLM chat and generate an image directly via GenerateImage tool.
+
+        Supports inline size/steps in the prompt:
+            "1024x768 20 steps: a cute cat"
+            "512x512: a cute cat"
+            "20 steps: a cute cat"
+            "a cute cat"  → defaults 1024x1024, 4 steps
+        """
+        import re
+        from nexus_station.tools.image import GenerateImage, Params
+
+        # Parse optional size and steps prefix, e.g. "1024x768 20 steps: ..."
+        width, height, steps = 1024, 1024, 4
+        clean_prompt = prompt
+
+        # Look for WIDTHxHEIGHT at the start
+        size_match = re.match(r"^(\d{3,4})x(\d{3,4})\b", clean_prompt)
+        if size_match:
+            width = int(size_match.group(1))
+            height = int(size_match.group(2))
+            clean_prompt = clean_prompt[size_match.end():].lstrip()
+
+        # Look for N steps at the start
+        steps_match = re.match(r"^(\d{1,2})\s*steps?\b", clean_prompt, re.IGNORECASE)
+        if steps_match:
+            steps = int(steps_match.group(1))
+            clean_prompt = clean_prompt[steps_match.end():].lstrip()
+
+        # Strip optional colon separator
+        if clean_prompt.startswith(":"):
+            clean_prompt = clean_prompt[1:].lstrip()
+
+        # If nothing left, fall back to original prompt
+        if not clean_prompt:
+            clean_prompt = prompt
+
+        # Clamp to Fireworks limits
+        width = max(256, min(2048, width))
+        height = max(256, min(2048, height))
+        steps = max(1, min(50, steps))
+
+        wire_send(StepBegin(n=1))
+        tool_call_id = f"img_{uuid.uuid4().hex[:8]}"
+        tool_call = ToolCall(
+            id=tool_call_id,
+            function=ToolCall.FunctionBody(
+                name="GenerateImage",
+                arguments=json.dumps({"prompt": clean_prompt, "width": width, "height": height, "steps": steps}),
+            ),
+        )
+        wire_send(tool_call)
+
+        tool = GenerateImage(self._runtime.config, self._runtime)
+        result = await tool(Params(prompt=clean_prompt, width=width, height=height, steps=steps))
+
+        wire_send(ToolResult(tool_call_id=tool_call_id, return_value=result))
+        if getattr(result, "is_error", False):
+            wire_send(TextPart(text="❌ Image generation failed."))
+        else:
+            wire_send(TextPart(text="✅ Image generated."))
 
     async def _turn(self, user_message: Message) -> TurnOutcome:
         if self._runtime.llm is None:

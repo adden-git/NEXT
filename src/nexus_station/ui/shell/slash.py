@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from typing import TYPE_CHECKING, Any, cast
 
 from prompt_toolkit.shortcuts.choice_input import ChoiceInput
@@ -12,7 +12,7 @@ from nexus_station.cli import Reload, SwitchToVis, SwitchToWeb
 from nexus_station.config import load_config, save_config
 from nexus_station.exception import ConfigError
 from nexus_station.session import Session
-from nexus_station.soul.nexussoul import NexusSoul
+from nexus_station.soul.kimisoul import KimiSoul
 from nexus_station.ui.shell.console import console
 from nexus_station.ui.shell.mcp_status import render_mcp_console
 from nexus_station.ui.shell.task_browser import TaskBrowserApp
@@ -35,9 +35,9 @@ registry = SlashCommandRegistry[ShellSlashCmdFunc]()
 shell_mode_registry = SlashCommandRegistry[ShellSlashCmdFunc]()
 
 
-def ensure_kimi_soul(app: Shell) -> NexusSoul | None:
-    if not isinstance(app.soul, NexusSoul):
-        console.print("[red]NexusSoul required[/red]")
+def ensure_kimi_soul(app: Shell) -> KimiSoul | None:
+    if not isinstance(app.soul, KimiSoul):
+        console.print("[red]KimiSoul required[/red]")
         return None
     return app.soul
 
@@ -61,6 +61,30 @@ _KEYBOARD_SHORTCUTS = [
     ("Ctrl-D", "Exit"),
     ("Ctrl-C", "Interrupt"),
 ]
+
+
+def _unique_commands(commands: Iterable[SlashCommand[Any]]) -> list[SlashCommand[Any]]:
+    unique: list[SlashCommand[Any]] = []
+    seen: set[str] = set()
+    for cmd in commands:
+        if cmd.name in seen:
+            continue
+        unique.append(cmd)
+        seen.add(cmd.name)
+    return unique
+
+
+def _expanded_command_items(commands: Iterable[SlashCommand[Any]]) -> list[tuple[str, str]]:
+    items: list[tuple[str, str]] = []
+    for cmd in sorted(_unique_commands(commands), key=lambda c: c.name):
+        seen = {cmd.name}
+        items.append((cmd.display_name(cmd.name), cmd.description))
+        for alias in cmd.aliases:
+            if alias in seen:
+                continue
+            items.append((cmd.display_name(alias), cmd.description))
+            seen.add(alias)
+    return items
 
 
 @registry.command(aliases=["h", "?"])
@@ -97,7 +121,7 @@ def help(app: Shell, args: str):
     renderables.append(
         BulletColumns(
             Text(
-                "Sure, Kimi is ready to help! "
+                "Sure, NEXUS is ready to help! "
                 "Just send me messages and I will help you get things done!"
             ),
         )
@@ -115,7 +139,7 @@ def help(app: Shell, args: str):
     renderables.append(
         section(
             "Slash commands",
-            [(c.slash_name(), c.description) for c in sorted(commands, key=lambda c: c.name)],
+            _expanded_command_items(commands),
             "blue",
         )
     )
@@ -123,13 +147,28 @@ def help(app: Shell, args: str):
         renderables.append(
             section(
                 "Skills",
-                [(c.slash_name(), c.description) for c in sorted(skills, key=lambda c: c.name)],
+                _expanded_command_items(skills),
                 "cyan",
             )
         )
 
     with console.pager(styles=True):
         console.print(Group(*renderables))
+
+
+@registry.command
+async def btw(app: Shell, args: str):
+    """Ask a side question without interrupting the main conversation"""
+    question = args.strip()
+    if not question:
+        console.print('[yellow]Usage: "/btw <question>"[/yellow]')
+        return
+    if ensure_kimi_soul(app) is None:
+        return
+    if app._prompt_session is None:  # pyright: ignore[reportPrivateUsage]
+        console.print("[yellow]/btw is only available in interactive shell mode.[/yellow]")
+        return
+    await app._run_btw_modal(question, app._prompt_session)  # pyright: ignore[reportPrivateUsage]
 
 
 @registry.command
@@ -414,7 +453,7 @@ async def feedback(app: Shell, args: str):
     from nexus_station.ui.shell.oauth import current_model_key
     from nexus_station.utils.aiohttp import new_client_session
 
-    ISSUE_URL = "https://github.com/MoonshotAI/nexus-station/issues"
+    ISSUE_URL = "https://github.com/MoonshotAI/kimi-cli/issues"
 
     def _fallback_to_issues():
         if not webbrowser.open(ISSUE_URL):
@@ -660,7 +699,7 @@ def theme(app: Shell, args: str):
 
 @registry.command
 def web(app: Shell, args: str):
-    """Open Kimi Code Web UI in browser"""
+    """Open NEXUS Station Web UI in browser"""
     from nexus_station.telemetry import track
 
     track("web_opened")
@@ -671,7 +710,7 @@ def web(app: Shell, args: str):
 
 @registry.command
 def vis(app: Shell, args: str):
-    """Open Kimi Agent Tracing Visualizer in browser"""
+    """Open NEXUS Agent Tracing Visualizer in browser"""
     from nexus_station.telemetry import track
 
     track("vis_opened")

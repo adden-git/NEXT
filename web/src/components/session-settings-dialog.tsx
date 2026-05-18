@@ -51,6 +51,8 @@ type GitDiffStats = {
 type GuardianSettings = {
   enabled: boolean;
   model: string | null;
+  prompt: string | null;
+  default_prompt: string | null;
   forbidden_files: string[];
 };
 
@@ -629,7 +631,7 @@ export function SessionSettingsDialog({ sessionId }: { sessionId: string }) {
   const [refactoring, setRefactoring] = useState(false);
   const [refactorResult, setRefactorResult] = useState<any>(null);
   const [gitDiff, setGitDiff] = useState<GitDiffStats | null>(null);
-  const [guardian, setGuardian] = useState<GuardianSettings>({ enabled: false, model: null, forbidden_files: [] });
+  const [guardian, setGuardian] = useState<GuardianSettings>({ enabled: false, model: null, prompt: null, default_prompt: null, forbidden_files: [] });
   const [guardianLoading, setGuardianLoading] = useState(false);
   const [guardianDirty, setGuardianDirty] = useState(false);
   const [configModels, setConfigModels] = useState<Record<string, { provider: string; model: string; display_name?: string }>>({});
@@ -709,7 +711,7 @@ export function SessionSettingsDialog({ sessionId }: { sessionId: string }) {
       ]);
       if (!gRes.ok) throw new Error(`HTTP ${gRes.status}`);
       const gData = await gRes.json();
-      setGuardian({ enabled: !!gData.enabled, model: gData.model || null, forbidden_files: gData.forbidden_files || [] });
+      setGuardian({ enabled: !!gData.enabled, model: gData.model || null, prompt: gData.prompt || null, default_prompt: gData.default_prompt || null, forbidden_files: gData.forbidden_files || [] });
       setGuardianDirty(false);
       if (mRes.ok) {
         const mData = await mRes.json();
@@ -727,7 +729,7 @@ export function SessionSettingsDialog({ sessionId }: { sessionId: string }) {
       const res = await fetch(`/api/sessions/${sessionId}/guardian`, {
         method: "PUT",
         headers: { "Content-Type": "application/json", ...getAuthHeader() },
-        body: JSON.stringify({ enabled: settings.enabled, model: settings.model, forbidden_files: settings.forbidden_files }),
+        body: JSON.stringify({ enabled: settings.enabled, model: settings.model, prompt: settings.prompt, forbidden_files: settings.forbidden_files }),
       });
       const data = await res.json();
       if (data.success) {
@@ -934,11 +936,14 @@ export function SessionSettingsDialog({ sessionId }: { sessionId: string }) {
                             className="h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                           >
                             <option value="">— Основная модель сессии —</option>
-                            {Object.entries(configModels).map(([name, m]) => (
-                              <option key={name} value={name}>
-                                {name} ({m.provider}) {m.display_name ? `— ${m.display_name}` : ""}
-                              </option>
-                            ))}
+                            {Object.entries(configModels).map(([name, m]) => {
+                              const info = m as { provider: string; display_name?: string; pricing?: string };
+                              return (
+                                <option key={name} value={name}>
+                                  {name} ({info.provider}) {info.display_name ? `— ${info.display_name}` : ""} {info.pricing ? `— ${info.pricing}` : ""}
+                                </option>
+                              );
+                            })}
                           </select>
                         ) : (
                           <Input
@@ -960,15 +965,47 @@ export function SessionSettingsDialog({ sessionId }: { sessionId: string }) {
                         </p>
                       </div>
 
+                      {/* Custom prompt */}
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium">Промпт Guardian AI (правила перепроверки)</label>
+                        <textarea
+                          value={guardian.prompt || ""}
+                          onChange={(e) => {
+                            const val = e.target.value || null;
+                            const next = { ...guardian, prompt: val };
+                            setGuardian(next);
+                            setGuardianDirty(true);
+                            if (guardianSaveTimeout.current) clearTimeout(guardianSaveTimeout.current);
+                            guardianSaveTimeout.current = setTimeout(() => saveGuardian(next), 1200);
+                          }}
+                          placeholder="Оставьте пустым для использования стандартного промпта Guardian AI..."
+                          rows={6}
+                          className="w-full rounded-md border border-input bg-background px-3 py-2 text-xs font-mono shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring resize-y"
+                        />
+                        <p className="text-[10px] text-muted-foreground">
+                          Этот промпт используется <b>только</b> вторым LLM (Guardian AI) для оценки риска инструментов. Он не влияет на основного агента. При заполнении полностью заменяет стандартный промпт Guardian.
+                        </p>
+                        {guardian.default_prompt && (
+                          <details className="text-[11px]">
+                            <summary className="cursor-pointer text-muted-foreground hover:text-foreground transition-colors">
+                              {guardian.prompt ? "Стандартный промпт (для справки)" : "Текущий стандартный промпт"}
+                            </summary>
+                            <div className="mt-1.5 rounded border border-border/50 bg-muted/30 px-2 py-1.5 font-mono text-[10px] text-muted-foreground whitespace-pre-wrap max-h-40 overflow-y-auto">
+                              {guardian.default_prompt}
+                            </div>
+                          </details>
+                        )}
+                      </div>
+
                       {/* Preset recommendations */}
                       <div className="rounded-md border bg-muted/20 p-3 space-y-2">
                         <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Рекомендуемые модели для Guardian</p>
                         <div className="space-y-1.5">
                           {[
-                            { name: "Llama 3.2 3B (Fireworks)", price: "$0.10 / 1M токенов", desc: "Самая дешевая, ~$0.00007 за проверку", color: "text-green-600 dark:text-green-400" },
-                            { name: "Llama 3.1 8B (Fireworks)", price: "$0.20 / 1M токенов", desc: "Лучший баланс, ~$0.00014 за проверку", color: "text-blue-600 dark:text-blue-400" },
-                            { name: "Qwen2.5 7B (Fireworks)", price: "$0.20 / 1M токенов", desc: "Хорошая точность, ~$0.00014 за проверку", color: "text-amber-600 dark:text-amber-400" },
-                            { name: "DeepSeek V3 (Fireworks)", price: "$0.56 / 1M токенов", desc: "Высокая точность, ~$0.00040 за проверку", color: "text-purple-600 dark:text-purple-400" },
+                            { name: "GLM-5 (Fireworks)", price: "$0.15 / 1M токенов", desc: "Самая дешевая, ~$0.00010 за проверку", color: "text-green-600 dark:text-green-400" },
+                            { name: "Kimi K2.5 (Fireworks)", price: "$0.30 / 1M токенов", desc: "Лучший баланс, ~$0.00020 за проверку", color: "text-blue-600 dark:text-blue-400" },
+                            { name: "DeepSeek V4 Pro (Fireworks)", price: "$0.80 / 1M токенов", desc: "Высокая точность, ~$0.00060 за проверку", color: "text-purple-600 dark:text-purple-400" },
+                            { name: "kimi-for-coding (Kimi)", price: "$0.50 / 1M токенов", desc: "Максимальная точность, ~$0.00035 за проверку", color: "text-amber-600 dark:text-amber-400" },
                           ].map((preset) => (
                             <div key={preset.name} className="flex items-center justify-between text-xs">
                               <div>

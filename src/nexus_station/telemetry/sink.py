@@ -11,6 +11,7 @@ import platform
 import threading
 from typing import Any
 
+from nexus_station.constant import NAME, get_build_sha
 from nexus_station.telemetry.transport import AsyncTransport
 from nexus_station.utils.logging import logger
 
@@ -35,6 +36,8 @@ class EventSink:
         self._flush_task: asyncio.Task[None] | None = None
         # Static context enrichment
         self._context: dict[str, Any] = {
+            "app_name": NAME,
+            "build_sha": get_build_sha(),
             "version": version,
             "runtime": "python",
             "platform": platform.system().lower(),

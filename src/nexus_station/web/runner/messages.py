@@ -1,4 +1,4 @@
-"""JSON-RPC message helpers for Kimi CLI web interface."""
+"""JSON-RPC message helpers for NEXUS CLI web interface."""
 
 from typing import Literal
 from uuid import uuid4

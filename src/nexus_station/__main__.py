@@ -6,7 +6,7 @@ from pathlib import Path
 
 
 def _prog_name() -> str:
-    return Path(sys.argv[0]).name or "kimi"
+    return Path(sys.argv[0]).name or "nexus"
 
 
 def main(argv: Sequence[str] | None = None) -> int | str | None:
@@ -22,15 +22,19 @@ def main(argv: Sequence[str] | None = None) -> int | str | None:
     if len(args) == 1 and args[0] in {"--version", "-V"}:
         from nexus_station.constant import get_version
 
-        print(f"kimi, version {get_version()}")
+        print(f"nexus, version {get_version()}")
         return 0
 
     from nexus_station.cli import cli
+    from nexus_station.utils.environment import GitBashNotFoundError
 
     try:
         return cli(args=args, prog_name=_prog_name())
     except SystemExit as exc:
         return exc.code
+    except GitBashNotFoundError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
     finally:
         set_phase("shutdown")
 

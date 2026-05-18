@@ -1,4 +1,4 @@
-"""Auth helpers and middleware for Kimi CLI web."""
+"""Auth helpers and middleware for NEXUS CLI web."""
 
 from __future__ import annotations
 
@@ -124,11 +124,7 @@ def get_client_ip(request: Request, trust_proxy: bool = False) -> str | None:
 
 
 class AuthMiddleware(BaseHTTPMiddleware):
-    """Bearer token auth, origin checks, and LAN-only mode for API routes.
-
-    Supports both static session_token (legacy) and dynamic user tokens
-    from ~/.nexus/web_users.json.
-    """
+    """Bearer token auth, origin checks, and LAN-only mode for API routes."""
 
     def __init__(
         self,
@@ -160,12 +156,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
         if path in {"/healthz", "/docs", "/scalar"}:
             return await call_next(request)
-        # Allow auth endpoints without token (for setup and login)
-        if path.startswith("/api/auth/"):
-            return await call_next(request)
-        # License status endpoint must be public so UI can show expiry screen
-        if path == "/api/config/license":
-            return await call_next(request)
         if not path.startswith("/api/"):
             return await call_next(request)
 
@@ -178,42 +168,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 )
 
         if self._session_token:
-            # Legacy static token mode
             provided = extract_token_from_request(request)
             if not verify_token(provided, self._session_token):
                 return JSONResponse(
                     status_code=401,
                     content={"detail": "Unauthorized"},
                 )
-        else:
-            # Dynamic user token mode
-            from nexus_station.web.auth_users import verify_token as verify_user_token, verify_admin_token
-            provided = extract_token_from_request(request)
-            if not provided:
-                return JSONResponse(
-                    status_code=401,
-                    content={"detail": "Unauthorized"},
-                )
-            # Master admin token bypasses all checks including sync
-            if verify_admin_token(provided):
-                return await call_next(request)
-            if not verify_user_token(provided):
-                return JSONResponse(
-                    status_code=401,
-                    content={"detail": "Unauthorized"},
-                )
-
-        # Session sync check — blocks API usage if trial expired
-        try:
-            from nexus_station.web.auth_users import check_sync
-            if not check_sync():
-                return JSONResponse(
-                    status_code=403,
-                    content={"detail": "Session sync expired. Contact support for renewal."},
-                )
-        except Exception:
-            # If sync check fails, allow access (graceful degradation)
-            pass
 
         return await call_next(request)
 

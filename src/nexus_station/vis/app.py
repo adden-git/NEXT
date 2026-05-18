@@ -1,4 +1,4 @@
-"""Kimi Agent Tracing Visualizer application."""
+"""NEXUS Agent Tracing Visualizer application."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ def create_app() -> FastAPI:
     }
 
     application = FastAPI(
-        title="Kimi Agent Tracing Visualizer",
+        title="NEXUS Agent Tracing Visualizer",
         docs_url=None,
         separate_input_output_schemas=False,
     )
@@ -143,7 +143,7 @@ def run_vis_server(
         banner_lines.extend(
             [
                 "<nowrap>  This feature is in Technical Preview and may be unstable.",
-                "<nowrap>  Please report issues to the nexus-station team.",
+                "<nowrap>  Please report issues to the kimi-cli team.",
                 "",
             ]
         )

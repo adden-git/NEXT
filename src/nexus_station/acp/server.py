@@ -16,8 +16,8 @@ from nexus_station.acp.session import ACPSession
 from nexus_station.acp.tools import replace_tools
 from nexus_station.acp.types import ACPContentBlock, MCPServer
 from nexus_station.acp.version import ACPVersionSpec, negotiate_version
-from nexus_station.app import NexusCLI
-from nexus_station.auth.oauth import NEXUS_CODE_OAUTH_KEY, load_tokens
+from nexus_station.app import KimiCLI
+from nexus_station.auth.oauth import KIMI_CODE_OAUTH_KEY, load_tokens
 from nexus_station.config import LLMModel, OAuthRef, load_config, save_config
 from nexus_station.constant import NAME, VERSION
 from nexus_station.llm import create_llm, derive_model_capabilities
@@ -77,7 +77,7 @@ class ACPServer:
         self._auth_methods = [
             acp.schema.AuthMethod(
                 id="login",
-                name="Login with Kimi account",
+                name="Login with NEXUS account",
                 description=(
                     "Run `kimi login` command in the terminal, "
                     "then follow the instructions to finish login."
@@ -87,7 +87,7 @@ class ACPServer:
                     "terminal-auth": {
                         "command": command,
                         "args": terminal_args,
-                        "label": "Kimi Code Login",
+                        "label": "NEXUS Code Login",
                         "env": {},
                         "type": "terminal",
                     }
@@ -115,7 +115,7 @@ class ACPServer:
     @staticmethod
     def _check_token_usable() -> str | None:
         """Return ``None`` if the persisted OAuth token is usable, else a reason string."""
-        ref = OAuthRef(storage="file", key=NEXUS_CODE_OAUTH_KEY)
+        ref = OAuthRef(storage="file", key=KIMI_CODE_OAUTH_KEY)
         token = load_tokens(ref)
 
         if token is None or not token.access_token:
@@ -126,7 +126,7 @@ class ACPServer:
         return None
 
     def _check_auth(self) -> None:
-        """Check if Kimi Code authentication is complete. Raise AUTH_REQUIRED if not."""
+        """Check if NEXUS Code authentication is complete. Raise AUTH_REQUIRED if not."""
         reason = self._check_token_usable()
         if reason:
             auth_methods_data: list[dict[str, Any]] = []
@@ -160,7 +160,7 @@ class ACPServer:
         session = await Session.create(KaosPath.unsafe_from_local_path(Path(cwd)))
 
         mcp_config = acp_mcp_servers_to_mcp_config(mcp_servers or [])
-        cli_instance = await NexusCLI.create(
+        cli_instance = await KimiCLI.create(
             session,
             mcp_configs=[mcp_config],
             ui_mode="acp",
@@ -230,7 +230,7 @@ class ACPServer:
             raise acp.RequestError.invalid_params({"session_id": "Session not found"})
 
         mcp_config = acp_mcp_servers_to_mcp_config(mcp_servers or [])
-        cli_instance = await NexusCLI.create(
+        cli_instance = await KimiCLI.create(
             session,
             mcp_configs=[mcp_config],
             resumed=True,  # _setup_session loads existing sessions

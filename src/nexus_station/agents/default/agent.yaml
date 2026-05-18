@@ -22,6 +22,7 @@ agent:
     - "nexus_station.tools.file:StrReplaceFile"
     - "nexus_station.tools.web:SearchWeb"
     - "nexus_station.tools.web:FetchURL"
+    - "nexus_station.tools.image:GenerateImage"
     - "nexus_station.tools.plan:ExitPlanMode"
     - "nexus_station.tools.plan.enter:EnterPlanMode"
   subagents:

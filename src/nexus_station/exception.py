@@ -1,43 +1,43 @@
 from __future__ import annotations
 
 
-class NexusCLIException(Exception):
+class KimiCLIException(Exception):
     """Base exception class for NEXUS Station."""
 
     pass
 
 
-class ConfigError(NexusCLIException, ValueError):
+class ConfigError(KimiCLIException, ValueError):
     """Configuration error."""
 
     pass
 
 
-class AgentSpecError(NexusCLIException, ValueError):
+class AgentSpecError(KimiCLIException, ValueError):
     """Agent specification error."""
 
     pass
 
 
-class InvalidToolError(NexusCLIException, ValueError):
+class InvalidToolError(KimiCLIException, ValueError):
     """Invalid tool error."""
 
     pass
 
 
-class SystemPromptTemplateError(NexusCLIException, ValueError):
+class SystemPromptTemplateError(KimiCLIException, ValueError):
     """System prompt template error."""
 
     pass
 
 
-class MCPConfigError(NexusCLIException, ValueError):
+class MCPConfigError(KimiCLIException, ValueError):
     """MCP config error."""
 
     pass
 
 
-class MCPRuntimeError(NexusCLIException, RuntimeError):
+class MCPRuntimeError(KimiCLIException, RuntimeError):
     """MCP runtime error."""
 
     pass

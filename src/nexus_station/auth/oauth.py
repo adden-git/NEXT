@@ -48,9 +48,9 @@ if TYPE_CHECKING:
 
 
 KIMI_CODE_CLIENT_ID = "17e5f671-d194-4dfb-9706-5516cb48c098"
-NEXUS_CODE_OAUTH_KEY = "oauth/kimi-code"
-DEFAULT_OAUTH_HOST = "https://auth.nexus.com"
-KEYRING_SERVICE = "nexus-code"
+KIMI_CODE_OAUTH_KEY = "oauth/kimi-code"
+DEFAULT_OAUTH_HOST = "https://auth.kimi.com"
+KEYRING_SERVICE = "kimi-code"
 REFRESH_INTERVAL_SECONDS = 60
 MIN_REFRESH_THRESHOLD_SECONDS = 300
 REFRESH_THRESHOLD_RATIO = 0.5
@@ -278,7 +278,7 @@ def _credentials_lock_path(key: str) -> Path:
 
 
 class _CrossProcessLock:
-    """File-based lock that coordinates token refresh across nexus-station processes.
+    """File-based lock that coordinates token refresh across kimi-cli processes.
 
     Uses fcntl.flock on Unix and msvcrt.locking on Windows.
     """
@@ -565,7 +565,7 @@ def _apply_kimi_code_config(
 ) -> None:
     platform = get_platform_by_id(KIMI_CODE_PLATFORM_ID)
     if platform is None:
-        raise OAuthError("Kimi Code platform not found.")
+        raise OAuthError("NEXUS Code platform not found.")
 
     provider_key = managed_provider_key(platform.id)
     config.providers[provider_key] = LLMProvider(
@@ -619,7 +619,7 @@ async def login_kimi_code(
 
     platform = get_platform_by_id(KIMI_CODE_PLATFORM_ID)
     if platform is None:
-        yield OAuthEvent("error", "Kimi Code platform is unavailable.")
+        yield OAuthEvent("error", "NEXUS Code platform is unavailable.")
         return
 
     auth: DeviceAuthorization
@@ -682,7 +682,7 @@ async def login_kimi_code(
 
     assert token is not None
 
-    oauth_ref = OAuthRef(storage="file", key=NEXUS_CODE_OAUTH_KEY)
+    oauth_ref = OAuthRef(storage="file", key=KIMI_CODE_OAUTH_KEY)
     oauth_ref = save_tokens(oauth_ref, token)
 
     try:
@@ -721,8 +721,8 @@ async def logout_kimi_code(config: Config) -> AsyncIterator[OAuthEvent]:
         )
         return
 
-    delete_tokens(OAuthRef(storage="keyring", key=NEXUS_CODE_OAUTH_KEY))
-    delete_tokens(OAuthRef(storage="file", key=NEXUS_CODE_OAUTH_KEY))
+    delete_tokens(OAuthRef(storage="keyring", key=KIMI_CODE_OAUTH_KEY))
+    delete_tokens(OAuthRef(storage="file", key=KIMI_CODE_OAUTH_KEY))
 
     provider_key = managed_provider_key(KIMI_CODE_PLATFORM_ID)
     if provider_key in config.providers:
@@ -871,7 +871,7 @@ class OAuthManager:
             self._config.services.moonshot_search,
             self._config.services.moonshot_fetch,
         ):
-            if service and service.oauth and service.oauth.key == NEXUS_CODE_OAUTH_KEY:
+            if service and service.oauth and service.oauth.key == KIMI_CODE_OAUTH_KEY:
                 return service.oauth
         return None
 
@@ -991,7 +991,7 @@ class OAuthManager:
                 return
 
             # Acquire cross-process file lock to coordinate with other
-            # nexus-station instances (terminal, VS Code, web).
+            # kimi-cli instances (terminal, VS Code, web).
             xlock = _CrossProcessLock(ref.key)
             acquired = await xlock.acquire_with_retry()
             try:

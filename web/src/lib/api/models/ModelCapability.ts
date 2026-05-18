@@ -20,6 +20,7 @@
 export const ModelCapability = {
     ImageIn: 'image_in',
     VideoIn: 'video_in',
+    ImageOut: 'image_out',
     Thinking: 'thinking',
     AlwaysThinking: 'always_thinking'
 } as const;

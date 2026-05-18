@@ -15,7 +15,7 @@ from kaos.path import KaosPath
 from pydantic import SecretStr
 
 from nexus_station.agentspec import DEFAULT_AGENT_FILE
-from nexus_station.auth.oauth import NEXUS_CODE_OAUTH_KEY, OAuthManager, get_device_id
+from nexus_station.auth.oauth import KIMI_CODE_OAUTH_KEY, OAuthManager, get_device_id
 from nexus_station.background.models import is_terminal_status
 from nexus_station.cli import InputFormat, OutputFormat
 from nexus_station.config import Config, LLMModel, LLMProvider, load_config
@@ -26,7 +26,7 @@ from nexus_station.share import get_share_dir
 from nexus_station.soul import RunCancelled, run_soul
 from nexus_station.soul.agent import Runtime, load_agent
 from nexus_station.soul.context import Context
-from nexus_station.soul.nexussoul import NexusSoul
+from nexus_station.soul.kimisoul import KimiSoul
 from nexus_station.utils.aioqueue import QueueShutDown
 from nexus_station.utils.envvar import get_env_bool
 from nexus_station.utils.logging import logger, open_original_stderr, redirect_stderr_to_logger
@@ -116,7 +116,7 @@ def _cleanup_stale_foreground_subagents(runtime: Runtime) -> None:
         subagent_store.update_instance(agent_id, status="failed")
 
 
-class NexusCLI:
+class KimiCLI:
     @staticmethod
     async def create(
         session: Session,
@@ -142,9 +142,9 @@ class NexusCLI:
         max_ralph_iterations: int | None = None,
         startup_progress: Callable[[str], None] | None = None,
         defer_mcp_loading: bool = False,
-    ) -> NexusCLI:
+    ) -> KimiCLI:
         """
-        Create a NexusCLI instance.
+        Create a KimiCLI instance.
 
         Args:
             session (Session): A session created by `Session.create` or `Session.continue_`.
@@ -176,13 +176,13 @@ class NexusCLI:
 
         Raises:
             FileNotFoundError: When the agent file is not found.
-            ConfigError(NexusCLIException, ValueError): When the configuration is invalid.
-            AgentSpecError(NexusCLIException, ValueError): When the agent specification is invalid.
-            SystemPromptTemplateError(NexusCLIException, ValueError): When the system prompt
+            ConfigError(KimiCLIException, ValueError): When the configuration is invalid.
+            AgentSpecError(KimiCLIException, ValueError): When the agent specification is invalid.
+            SystemPromptTemplateError(KimiCLIException, ValueError): When the system prompt
                 template is invalid.
-            InvalidToolError(NexusCLIException, ValueError): When any tool cannot be loaded.
-            MCPConfigError(NexusCLIException, ValueError): When any MCP configuration is invalid.
-            MCPRuntimeError(NexusCLIException, RuntimeError): When any MCP server cannot be
+            InvalidToolError(KimiCLIException, ValueError): When any tool cannot be loaded.
+            MCPConfigError(KimiCLIException, ValueError): When any MCP configuration is invalid.
+            MCPRuntimeError(KimiCLIException, RuntimeError): When any MCP server cannot be
                 connected.
         """
         _create_t0 = time.monotonic()
@@ -309,7 +309,7 @@ class NexusCLI:
         else:
             await context.write_system_prompt(agent.system_prompt)
 
-        soul = NexusSoul(agent, context=context)
+        soul = KimiSoul(agent, context=context)
 
         # Activate plan mode if requested (for new sessions or --plan flag)
         if plan_mode and not soul.plan_mode:
@@ -329,7 +329,7 @@ class NexusCLI:
         from nexus_station.telemetry import attach_sink, set_context
         from nexus_station.telemetry import disable as disable_telemetry
 
-        telemetry_disabled = not config.telemetry or get_env_bool("NEXUS_DISABLE_TELEMETRY")
+        telemetry_disabled = not config.telemetry or get_env_bool("KIMI_DISABLE_TELEMETRY")
         if telemetry_disabled:
             disable_telemetry()
         else:
@@ -339,7 +339,7 @@ class NexusCLI:
             from nexus_station.telemetry.transport import AsyncTransport
 
             def _get_token() -> str | None:
-                return oauth.get_cached_access_token(NEXUS_CODE_OAUTH_KEY)
+                return oauth.get_cached_access_token(KIMI_CODE_OAUTH_KEY)
 
             transport = AsyncTransport(device_id=device_id, get_access_token=_get_token)
             sink = EventSink(
@@ -373,11 +373,11 @@ class NexusCLI:
             mcp_ms=_phase_timings_ms.get("mcp_ms", 0),
         )
 
-        return NexusCLI(soul, runtime, env_overrides, bg_refresh_task)
+        return KimiCLI(soul, runtime, env_overrides, bg_refresh_task)
 
     def __init__(
         self,
-        _soul: NexusSoul,
+        _soul: KimiSoul,
         _runtime: Runtime,
         _env_overrides: dict[str, str],
         _bg_refresh_task: asyncio.Task[None] | None = None,
@@ -388,8 +388,8 @@ class NexusCLI:
         self._bg_refresh_task = _bg_refresh_task
 
     @property
-    def soul(self) -> NexusSoul:
-        """Get the NexusSoul instance."""
+    def soul(self) -> KimiSoul:
+        """Get the KimiSoul instance."""
         return self._soul
 
     @property
@@ -534,7 +534,7 @@ class NexusCLI:
             merge_wire_messages (bool): Whether to merge Wire messages as much as possible.
 
         Yields:
-            WireMessage: The Wire messages from the `NexusSoul`.
+            WireMessage: The Wire messages from the `KimiSoul`.
 
         Raises:
             LLMNotSet: When the LLM is not set.
@@ -700,19 +700,19 @@ class NexusCLI:
             ),
             WelcomeInfoItem(name="Session", value=self._runtime.session.id),
         ]
-        if base_url := self._env_overrides.get("NEXUS_BASE_URL"):
+        if base_url := self._env_overrides.get("KIMI_BASE_URL"):
             welcome_info.append(
                 WelcomeInfoItem(
                     name="API URL",
-                    value=f"{base_url} (from NEXUS_BASE_URL)",
+                    value=f"{base_url} (from KIMI_BASE_URL)",
                     level=WelcomeInfoItem.Level.WARN,
                 )
             )
-        if self._env_overrides.get("NEXUS_API_KEY"):
+        if self._env_overrides.get("KIMI_API_KEY"):
             welcome_info.append(
                 WelcomeInfoItem(
                     name="API Key",
-                    value="****** (from NEXUS_API_KEY)",
+                    value="****** (from KIMI_API_KEY)",
                     level=WelcomeInfoItem.Level.WARN,
                 )
             )
@@ -724,11 +724,11 @@ class NexusCLI:
                     level=WelcomeInfoItem.Level.WARN,
                 )
             )
-        elif "NEXUS_MODEL_NAME" in self._env_overrides:
+        elif "KIMI_MODEL_NAME" in self._env_overrides:
             welcome_info.append(
                 WelcomeInfoItem(
                     name="Model",
-                    value=f"{self._soul.model_name} (from NEXUS_MODEL_NAME)",
+                    value=f"{self._soul.model_name} (from KIMI_MODEL_NAME)",
                     level=WelcomeInfoItem.Level.WARN,
                 )
             )
@@ -751,7 +751,7 @@ class NexusCLI:
                 welcome_info.append(
                     WelcomeInfoItem(
                         name="Tip",
-                        value="send /login to use Kimi for Coding",
+                        value="send /login to use NEXUS for Coding",
                         level=WelcomeInfoItem.Level.WARN,
                     )
                 )
@@ -760,7 +760,7 @@ class NexusCLI:
                 name="\nTip",
                 value=(
                     "Spot a bug or have feedback? Type /feedback right in this session"
-                    " — every report makes Kimi better."
+                    " — every report makes NEXUS better."
                 ),
                 level=WelcomeInfoItem.Level.INFO,
             )

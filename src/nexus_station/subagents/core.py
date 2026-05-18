@@ -13,7 +13,7 @@ from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from nexus_station.soul.context import Context
-from nexus_station.soul.nexussoul import NexusSoul
+from nexus_station.soul.kimisoul import KimiSoul
 from nexus_station.subagents.builder import SubagentBuilder
 from nexus_station.subagents.models import AgentLaunchSpec, AgentTypeDefinition
 from nexus_station.subagents.store import SubagentStore
@@ -39,7 +39,7 @@ async def prepare_soul(
     builder: SubagentBuilder,
     store: SubagentStore,
     on_stage: Callable[[str], None] | None = None,
-) -> tuple[NexusSoul, str]:
+) -> tuple[KimiSoul, str]:
     """Build agent, restore context, handle system prompt, write prompt file.
 
     Returns ``(soul, final_prompt)`` ready for execution via
@@ -74,7 +74,7 @@ async def prepare_soul(
     if spec.type_def.name == "explore" and not spec.resumed:
         from nexus_station.subagents.git_context import collect_git_context
 
-        git_ctx = await collect_git_context(runtime.builtin_args.NEXUS_WORK_DIR)
+        git_ctx = await collect_git_context(runtime.builtin_args.KIMI_WORK_DIR)
         if git_ctx:
             prompt = f"{git_ctx}\n\n{prompt}"
 
@@ -82,5 +82,5 @@ async def prepare_soul(
     store.prompt_path(spec.agent_id).write_text(prompt, encoding="utf-8")
 
     # 6. Create soul
-    soul = NexusSoul(agent, context=context)
+    soul = KimiSoul(agent, context=context)
     return soul, prompt

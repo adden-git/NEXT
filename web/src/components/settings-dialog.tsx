@@ -16,6 +16,7 @@ type ExtendedConfig = {
   default_yolo: boolean;
   default_plan_mode: boolean;
   theme: string;
+  image_output_dir: string;
   show_thinking_stream: boolean;
   merge_all_available_skills: boolean;
   loop_control: {
@@ -425,7 +426,17 @@ export function SettingsDialog() {
                 <div className="space-y-3">
                   <div className="flex items-center justify-between">
                     <label htmlFor="default_model" className="text-sm font-medium">Модель по умолчанию</label>
-                    <Input id="default_model" value={cfg.default_model} onChange={(e) => updateField("default_model", e.target.value)} className="w-64" />
+                    <select
+                      id="default_model"
+                      value={cfg.default_model}
+                      onChange={(e) => updateField("default_model", e.target.value)}
+                      className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring w-64"
+                    >
+                      <option value="">— Выберите модель —</option>
+                      {Object.entries(cfg.models || {}).map(([key, model]) => (
+                        <option key={key} value={key}>{(model as any).display_name || key}</option>
+                      ))}
+                    </select>
                   </div>
                   <div className="flex items-center justify-between">
                     <label htmlFor="default_thinking" className="text-sm font-medium">Режим размышлений</label>
@@ -443,17 +454,18 @@ export function SettingsDialog() {
                     <label htmlFor="show_thinking_stream" className="text-sm font-medium">Показывать поток размышлений</label>
                     <Switch id="show_thinking_stream" checked={cfg.show_thinking_stream} onCheckedChange={(v) => updateField("show_thinking_stream", v)} />
                   </div>
-                  <div className="flex items-center justify-between">
-                    <label htmlFor="theme" className="text-sm font-medium">Тема терминала</label>
-                    <select
-                      id="theme"
-                      value={cfg.theme || "dark"}
-                      onChange={(e) => updateField("theme", e.target.value)}
-                      className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                    >
-                      <option value="dark">Тёмная</option>
-                      <option value="light">Светлая</option>
-                    </select>
+                  <div className="space-y-2">
+                    <label htmlFor="image_output_dir" className="text-sm font-medium">Папка для сохранения изображений</label>
+                    <Input
+                      id="image_output_dir"
+                      value={cfg.image_output_dir || ""}
+                      onChange={(e) => updateField("image_output_dir", e.target.value)}
+                      placeholder="Оставьте пустым — сохранять в папку сессии"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Путь к директории где будут сохраняться сгенерированные изображения.
+                      Если пусто — изображения сохраняются внутри каждой сессии.
+                    </p>
                   </div>
                   <div className="flex items-center justify-between">
                     <label htmlFor="merge_all_available_skills" className="text-sm font-medium">Объединять все навыки</label>
@@ -554,10 +566,10 @@ export function SettingsDialog() {
                         const nextProviders = providerExists ? prev.providers : { ...prev.providers, fireworks: { type: "openai_legacy", base_url: "https://api.fireworks.ai/inference/v1", api_key: "" } };
                         const nextModels = { ...prev.models };
                         const fireworksModels: Record<string, { provider: string; model: string; max_context_size: number; capabilities: string[]; display_name: string }> = {
-                          "llama-3.2-3b": { provider: "fireworks", model: "accounts/fireworks/models/llama-v3p2-3b-instruct", max_context_size: 131072, capabilities: [], display_name: "Llama 3.2 3B" },
-                          "llama-3.1-8b": { provider: "fireworks", model: "accounts/fireworks/models/llama-v3p1-8b-instruct", max_context_size: 131072, capabilities: [], display_name: "Llama 3.1 8B" },
-                          "qwen-2.5-7b": { provider: "fireworks", model: "accounts/fireworks/models/qwen2p5-7b-instruct", max_context_size: 32768, capabilities: [], display_name: "Qwen2.5 7B" },
-                          "deepseek-v3": { provider: "fireworks", model: "accounts/fireworks/models/deepseek-v3", max_context_size: 65536, capabilities: [], display_name: "DeepSeek V3" },
+                          "deepseek-v4-pro": { provider: "fireworks", model: "accounts/fireworks/models/deepseek-v4-pro", max_context_size: 131072, capabilities: ["thinking"], display_name: "DeepSeek V4 Pro" },
+                          "glm-5": { provider: "fireworks", model: "accounts/fireworks/models/glm-5", max_context_size: 131072, capabilities: [], display_name: "GLM-5" },
+                          "kimi-k2p5": { provider: "fireworks", model: "accounts/fireworks/models/kimi-k2p5", max_context_size: 131072, capabilities: ["thinking"], display_name: "Kimi K2.5" },
+                          "flux-1-dev": { provider: "fireworks", model: "accounts/fireworks/models/flux-1-dev-fp8", max_context_size: 4096, capabilities: ["image_in"], display_name: "FLUX.1 Dev (Image)" },
                         };
                         let addedCount = 0;
                         for (const [k, v] of Object.entries(fireworksModels)) {
