@@ -34,5 +34,4 @@ if __name__ == "__main__":
         dangerously_omit_auth=False,
         restrict_sensitive_apis=False,
         lan_only=False,
-        dynamic_auth=True,
     )
